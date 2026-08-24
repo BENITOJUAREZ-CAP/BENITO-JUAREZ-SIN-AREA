@@ -9,7 +9,7 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🔍 Verificador de Estatus y Captura (Columna G Vacía)")
+st.title("🔍 Verificador de Estatus y Captura")
 
 SPREADSHEET_ID = "1gzkpEijOVCOUqDjkNlyAQRIGpyqH_2j1H4rWGe2NTgM"
 NOMBRE_HOJA = "CRUCE"
@@ -64,44 +64,49 @@ if gc:
                     
                     st.divider()
                     
-                    # VALIDACIÓN DIRECTA: ¿La celda de la columna G está vacía?
-                    esta_vacia = (estatus_celda == "") or (estatus_celda.lower() == "none") or (estatus_celda.lower() == "nan")
+                    # Verificación: ¿La celda de la columna G está vacía?
+                    esta_vacia = (estatus_celda == "") or (estatus_celda.lower() in ["none", "nan", "null"])
                     
                     if not esta_vacia:
-                        # CASO 1: TIENE CONTENIDO (No está vacía -> Muestra información sin permitir capturar)
-                        st.info("ℹ️ **REGISTRO YA TIENE ESTATUS ASIGNADO**")
+                        # SI YA TIENE CONTENIDO (No está vacía) -> Muestra la información y no deja capturar
+                        st.info("ℹ️ **REGISTRO CON ESTATUS REGISTRADO**")
                         
                         col1, col2, col3, col4 = st.columns(4)
                         col1.metric("CURP", curp_busqueda)
                         col2.metric("Nombre", nombre_completo)
-                        col3.metric("Estatus en Columna G", estatus_celda)
-                        col4.metric("Folio", folio_val if folio_val else "Sin Folio")
+                        col3.metric("Estatus (Columna G)", estatus_celda)
+                        col4.metric("Folio (Columna H)", folio_val if folio_val else "Sin Folio")
                         
                     else:
-                        # CASO 2: COLUMNA G VACÍA (Permite realizar la captura)
-                        st.warning("⚠️ **ESTATUS VACÍO: DISPONIBLE PARA CAPTURAR**")
+                        # SI LA COLUMNA G ESTÁ VACÍA -> Muestra los datos y el BOTÓN de captura
+                        st.warning("⚠️ **COLUMNA G VACÍA: PENDIENTE POR CAPTURAR**")
                         
                         st.markdown(f"**Nombre:** {nombre_completo}")
                         st.markdown(f"**Programa:** {fila_data.get('PROGAMA', fila_data.get('OGAMA', ''))} | **ID:** {fila_data.get('ID', '')}")
                         
                         st.divider()
                         
-                        with st.form("form_captura", clear_on_submit=True):
-                            st.subheader("📝 Capturar Registro")
-                            nuevo_folio = st.text_input("Ingresa el Folio a asignar:").strip()
-                            btn_guardar = st.form_submit_button("💾 Guardar como Capturado")
+                        col_input, col_btn = st.columns([2, 1])
+                        with col_input:
+                            nuevo_folio = st.text_input("Folio (opcional):", key=f"folio_{idx_fila}").strip()
+                        
+                        with col_btn:
+                            st.write(" ") # Espaciador para alinear con el input
+                            st.write(" ")
+                            btn_capturar = st.button("✅ MARCAR COMO CAPTURADO", use_container_width=True)
                             
-                            if btn_guardar:
-                                num_fila_sheets = idx_fila + 2
-                                
-                                # Columna 7 = G (ESTATUS), Columna 8 = H (FOLIO)
-                                ws.update_cell(num_fila_sheets, 7, "✓ Capturado")
+                        if btn_capturar:
+                            num_fila_sheets = idx_fila + 2
+                            
+                            # Actualiza la Columna G (7) a "✓ Capturado" y la Columna H (8) con el Folio ingresado (si lo hay)
+                            ws.update_cell(num_fila_sheets, 7, "✓ Capturado")
+                            if nuevo_folio:
                                 ws.update_cell(num_fila_sheets, 8, nuevo_folio)
                                 
-                                st.success(f"¡Se registró '✓ Capturado' y Folio **{nuevo_folio}** en la columna G y H!")
-                                st.rerun()
+                            st.success("¡Estatus actualizado a '✓ Capturado' correctamente!")
+                            st.rerun()
                 else:
-                    st.error(f"❌ La CURP **{curp_busqueda}** no existe en la hoja CRUCE.")
+                    st.error(f"❌ La CURP **{curp_busqueda}** no existe en la pestaña CRUCE.")
                     
     except Exception as e:
         st.error(f"Error al leer los datos de Google Sheets: {e}")
