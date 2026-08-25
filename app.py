@@ -59,23 +59,17 @@ if gc:
                     fila_data = coincidencias.iloc[0]
                     
                     nombre_completo = f"{fila_data.get('NOMBRE', '')} {fila_data.get('APELLIDO 1', '')} {fila_data.get('APELLIDO 2', '')}".strip()
-                    
                     estatus_celda = str(fila_data.get("ESTATUS", "")).strip()
                     estatus_upper = estatus_celda.upper()
                     folio_val = str(fila_data.get("FOLIO", "")).strip()
                     
                     st.divider()
                     
-                    # VALIDACIÓN: Permite capturar si la columna G está en blanco O si dice "NO CAPTURADO"
                     esta_vacia = (estatus_celda == "") or (estatus_celda.lower() in ["none", "nan", "null"])
                     es_no_capturado = "NO CAPTURADO" in estatus_upper
-                    
                     permite_capturar = esta_vacia or es_no_capturado
                     
                     if permite_capturar:
-                        # ---------------------------------------------------------
-                        # CASO 1: EN BLANCO O "NO CAPTURADO" -> PERMITE CAPTURAR
-                        # ---------------------------------------------------------
                         st.warning("⚠️ **REGISTRO DISPONIBLE PARA CAPTURAR**")
                         
                         st.markdown(f"**Nombre:** {nombre_completo}")
@@ -84,32 +78,28 @@ if gc:
                         
                         st.divider()
                         
-                        col_input, col_btn = st.columns([2, 1])
-                        with col_input:
-                            nuevo_folio = st.text_input("Ingresa Folio a asignar:", key=f"input_folio_{idx_fila}").strip()
-                        
-                        with col_btn:
-                            st.write("")
-                            st.write("")
-                            btn_capturar = st.button("✅ CAPTURAR", use_container_width=True, key=f"btn_{idx_fila}")
+                        with st.form("form_directo", clear_on_submit=False):
+                            nuevo_folio = st.text_input("Ingresa Folio a asignar:").strip()
+                            btn_capturar = st.form_submit_button("✅ CAPTURAR AHORA", use_container_width=True)
                             
-                        if btn_capturar:
-                            num_fila_sheets = idx_fila + 2
-                            
-                            # Escribe "✓ Capturado" en la Columna 7 (G)
-                            ws.update_cell(num_fila_sheets, 7, "✓ Capturado")
-                            
-                            # Guarda el Folio en la Columna 8 (H) si se ingresó uno
-                            if nuevo_folio:
-                                ws.update_cell(num_fila_sheets, 8, nuevo_folio)
+                            if btn_capturar:
+                                # Búsqueda directa en la columna C de Google Sheets para obtener la fila real
+                                cell = ws.find(curp_busqueda, in_column=3)
                                 
-                            st.success(f"¡Se actualizó la fila {num_fila_sheets} a '✓ Capturado' correctamente!")
-                            st.rerun()
+                                if cell:
+                                    fila_exacta = cell.row
+                                    
+                                    # Escribe "✓ Capturado" en la Columna 7 (G) y el Folio en la Columna 8 (H)
+                                    ws.update_cell(fila_exacta, 7, "✓ Capturado")
+                                    if nuevo_folio:
+                                        ws.update_cell(fila_exacta, 8, nuevo_folio)
+                                        
+                                    st.success(f"¡Se actualizó con éxito la fila {fila_exacta} en Google Sheets!")
+                                    st.rerun()
+                                else:
+                                    st.error("No se pudo localizar la celda exacta en la columna C.")
                             
                     else:
-                        # ---------------------------------------------------------
-                        # CASO 2: YA TIENE "CAPTURADO" -> ZONAS PRIORITARIAS BENITO JUÁREZ
-                        # ---------------------------------------------------------
                         st.info("ℹ️ **EL REGISTRO YA SE ENCUENTRA CAPTURADO**")
                         
                         col1, col2, col3, col4 = st.columns(4)
