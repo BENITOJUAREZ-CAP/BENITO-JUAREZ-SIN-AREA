@@ -46,20 +46,24 @@ if gc:
             headers = [str(h).strip().upper() for h in datos[0]]
             df = pd.DataFrame(datos[1:], columns=headers)
             
-            df["CURP_CLEAN"] = df["CURP"].astype(str).str.strip().str.upper()
+            # Campo de entrada único para CURP o ID
+            busqueda_input = st.text_input("🔑 Escanea o ingresa la CURP o el ID:", placeholder="Ej. PARL420507MDFTDR06 o 13305023").strip().upper()
             
-            curp_input = st.text_input("🔑 Escanea o ingresa la CURP:", placeholder="Ej. PARL420507MDFTDR06").strip().upper()
-            
-            if curp_input:
-                # Buscar todas las coincidencias exactas en la Columna C (3)
-                celdas_coincidentes = ws.findall(curp_input, in_column=3)
+            if busqueda_input:
+                # Determinar si la búsqueda es por ID (solo números) o por CURP (Columna B = 2, Columna C = 3)
+                es_id = busqueda_input.isdigit()
+                col_busqueda = 2 if es_id else 3
+                tipo_busqueda = "ID" if es_id else "CURP"
+                
+                # Buscar todas las coincidencias en la columna correspondiente
+                celdas_coincidentes = ws.findall(busqueda_input, in_column=col_busqueda)
                 
                 if celdas_coincidentes:
                     filas_encontradas = [cell.row for cell in celdas_coincidentes]
                     
-                    # SI HAY DUPLICADOS -> APLICAR REGLA DE DEPURACIÓN DE DUPLICADOS
+                    # GESTIÓN DE DUPLICADOS
                     if len(filas_encontradas) > 1:
-                        st.warning(f"⚠️ Se detectaron **{len(filas_encontradas)} registros duplicados** para la CURP `{curp_input}`.")
+                        st.warning(f"⚠️ Se detectaron **{len(filas_encontradas)} registros duplicados** para el {tipo_busqueda} `{busqueda_input}`.")
                         
                         info_filas = []
                         for f in filas_encontradas:
@@ -71,23 +75,22 @@ if gc:
                         
                         filas_a_borrar = []
                         if len(capturados) > 0:
-                            # Si ya existe un capturado, borramos todos los duplicados vacíos
+                            # Si hay capturado, borramos todos los que están en blanco
                             filas_a_borrar = [x["fila"] for x in en_blanco]
                         else:
-                            # Si todos están vacíos, dejamos la primera fila y borramos las demás
+                            # Si todos están en blanco, dejamos la primera fila y borramos el resto
                             filas_a_borrar = [x["fila"] for x in en_blanco[1:]]
                         
                         if filas_a_borrar:
                             if st.button("🧹 Limpiar duplicados automáticamente"):
-                                # Eliminar de abajo hacia arriba para evitar desplazamiento de índices
                                 for f in sorted(filas_a_borrar, reverse=True):
                                     ws.delete_rows(f)
                                 st.success(f"Se eliminaron {len(filas_a_borrar)} registro(s) duplicado(s) sobrante(s).")
                                 st.cache_data.clear()
                                 st.rerun()
 
-                    # Tomar la celda activa principal
-                    celda_principal = ws.find(curp_input, in_column=3)
+                    # Tomar la primera celda activa válida
+                    celda_principal = ws.find(busqueda_input, in_column=col_busqueda)
                     fila_real = celda_principal.row
                     
                     valores_fila = ws.row_values(fila_real)
@@ -116,15 +119,15 @@ if gc:
                         with col_info:
                             st.markdown("### Datos del Beneficiario")
                             st.write(f"**Nombre:** {nombre}")
-                            st.write(f"**CURP:** {curp_val}")
                             st.write(f"**ID:** {id_registro}")
+                            st.write(f"**CURP:** {curp_val}")
                             st.write(f"**Programa:** {programa}")
                             st.write(f"**Fila en Sheets:** `{fila_real}`")
                             st.write(f"**Estatus actual en Columna G:** `{estatus_actual if estatus_actual else 'Vacío'}`")
                         
                         with col_form:
                             st.markdown("### Capturar Información")
-                            with st.form(key=f"form_captura_{curp_input}"):
+                            with st.form(key=f"form_captura_{busqueda_input}"):
                                 folio_nuevo = st.text_input("Folio a asignar (opcional):", key="input_folio").strip()
                                 capturista_input = st.text_input("👤 Nombre de la persona que captura (Columna J):", placeholder="Ej. Juan Pérez").strip()
                                 
@@ -135,10 +138,8 @@ if gc:
                                         st.error("Por favor ingresa el nombre de la persona que está realizando la captura.")
                                     else:
                                         try:
-                                            # Fecha y hora actual
                                             fecha_hora_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                             
-                                            # Escribir en Google Sheets:
                                             # Columna G (7): Estatus
                                             ws.update_cell(fila_real, 7, "✓ Capturado")
                                             
@@ -161,11 +162,12 @@ if gc:
                         st.subheader("🔵 Registro Ya Capturado")
                         
                         c1, c2, c3, c4 = st.columns(4)
-                        c1.metric("CURP", curp_val)
-                        c2.metric("Nombre", nombre)
-                        c3.metric("Estatus (G)", estatus_actual)
-                        c4.metric("Folio Asignado (H)", folio_actual if folio_actual else "Sin Folio")
+                        c1.metric("ID", id_registro)
+                        c2.metric("CURP", curp_val)
+                        c3.metric("Nombre", nombre)
+                        c4.metric("Estatus (G)", estatus_actual)
                         
+                        st.write(f"📋 **Folio Asignado (H):** {folio_actual if folio_actual else 'Sin Folio'}")
                         st.write(f"📅 **Fecha de Captura (Columna I):** {fecha_captura if fecha_captura else 'No registrada'}")
                         st.write(f"👤 **Capturado por (Columna J):** {capturista_val if capturista_val else 'No registrado'}")
                         
@@ -184,6 +186,6 @@ if gc:
                         })
                         st.dataframe(zonas_bj, use_container_width=True, hide_index=True)
                 else:
-                    st.error(f"❌ La CURP '{curp_input}' no se encuentra en la pestaña CRUCE.")
+                    st.error(f"❌ El {tipo_busqueda} '{busqueda_input}' no se encuentra en la pestaña CRUCE.")
     except Exception as e:
         st.error(f"Ocurrió un error al procesar los datos: {e}")
