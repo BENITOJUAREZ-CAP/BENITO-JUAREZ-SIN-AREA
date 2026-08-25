@@ -24,7 +24,7 @@ def obtener_cliente_gspread():
             creds_dict = dict(st.secrets["gcp_service_account"])
             creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPE)
             return gspread.authorize(creds)
-        st.error("No se encontraron credenciales en los Secrets de Streamlit.")
+        st.error("No se encontraron credenciales en los Secrets.")
         return None
     except Exception as e:
         st.error(f"Error de autenticación: {e}")
@@ -39,17 +39,12 @@ if gc:
         sh = gc.open_by_key(SPREADSHEET_ID)
         ws = sh.worksheet(NOMBRE_HOJA)
         
-        # Cargar todos los datos de la hoja
         datos = ws.get_all_values()
         
         if datos:
             headers = [str(h).strip().upper() for h in datos[0]]
-            
-            # Crear DataFrame y guardar la fila real de Google Sheets para evitar desfases
             df = pd.DataFrame(datos[1:], columns=headers)
-            df["FILA_SHEETS"] = range(2, len(df) + 2)  # La fila 1 son los encabezados
             
-            # Limpieza para búsqueda exacta por CURP
             df["CURP_CLEAN"] = df["CURP"].astype(str).str.strip().str.upper()
             
             curp_input = st.text_input("🔑 Escanea o ingresa la CURP:", placeholder="Ej. PARL420507MDFTDR06").strip().upper()
@@ -59,7 +54,6 @@ if gc:
                 
                 if not registro.empty:
                     fila_info = registro.iloc[0]
-                    num_fila = int(fila_info["FILA_SHEETS"])
                     
                     nombre = f"{fila_info.get('NOMBRE', '')} {fila_info.get('APELLIDO 1', '')} {fila_info.get('APELLIDO 2', '')}".strip()
                     estatus_actual = str(fila_info.get("ESTATUS", "")).strip()
@@ -69,13 +63,9 @@ if gc:
                     
                     st.divider()
                     
-                    # Evalúa si requiere captura: si la celda está vacía o contiene "NO CAPTURADO"
                     necesita_captura = (estatus_actual == "") or ("NO CAPTURADO" in estatus_actual.upper())
                     
                     if necesita_captura:
-                        # -------------------------------------------------------------
-                        # OPCIÓN A: EN BLANCO / NO CAPTURADO -> OPCIÓN DE CAPTURA
-                        # -------------------------------------------------------------
                         st.subheader("🟢 Registro Disponible para Captura")
                         
                         col_info, col_form = st.columns([1, 1], gap="large")
@@ -90,26 +80,31 @@ if gc:
                         
                         with col_form:
                             st.markdown("### Capturar Folio")
-                            with st.form(key=f"form_captura_{num_fila}"):
+                            with st.form(key=f"form_captura_{curp_input}"):
                                 folio_nuevo = st.text_input("Folio a asignar (opcional):", key="input_folio").strip()
                                 submit = st.form_submit_button("✅ REGISTRAR Y MARCAR CAPTURADO", use_container_width=True)
                                 
                                 if submit:
                                     try:
-                                        # Escribe directo en la fila real de Google Sheets (G=7, H=8)
-                                        ws.update_cell(num_fila, 7, "✓ Capturado")
-                                        if folio_nuevo:
-                                            ws.update_cell(num_fila, 8, folio_nuevo)
+                                        # Búsqueda en vivo de la fila exacta en la columna C (CURP)
+                                        celda_encontrada = ws.find(curp_input, in_column=3)
                                         
-                                        st.success(f"¡Se actualizó con éxito la fila {num_fila} en la hoja de cálculo!")
-                                        st.cache_data.clear()
-                                        st.rerun()
+                                        if celda_encontrada:
+                                            fila_real = celda_encontrada.row
+                                            
+                                            # Actualiza exactamente esa fila en Columna 7 (G) y Columna 8 (H)
+                                            ws.update_cell(fila_real, 7, "✓ Capturado")
+                                            if folio_nuevo:
+                                                ws.update_cell(fila_real, 8, folio_nuevo)
+                                            
+                                            st.success(f"¡Se escribió '✓ Capturado' exitosamente en la fila {fila_real} de Google Sheets!")
+                                            st.cache_data.clear()
+                                            st.rerun()
+                                        else:
+                                            st.error("No se pudo hallar la celda exacta en Google Sheets.")
                                     except Exception as err:
                                         st.error(f"Error al escribir en Google Sheets: {err}")
                     else:
-                        # -------------------------------------------------------------
-                        # OPCIÓN B: YA CAPTURADO -> CONSULTA Y ZONAS PRIORITARIAS
-                        # -------------------------------------------------------------
                         st.subheader("🔵 Registro Ya Capturado")
                         
                         c1, c2, c3, c4 = st.columns(4)
