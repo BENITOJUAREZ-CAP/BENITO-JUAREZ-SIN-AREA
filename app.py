@@ -24,7 +24,7 @@ def obtener_cliente_gspread():
             creds_dict = dict(st.secrets["gcp_service_account"])
             creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPE)
             return gspread.authorize(creds)
-        st.error("No se encontraron credenciales en los Secrets.")
+        st.error("No se encontraron credenciales en los Secrets de Streamlit.")
         return None
     except Exception as e:
         st.error(f"Error de autenticación: {e}")
@@ -50,16 +50,59 @@ if gc:
             curp_input = st.text_input("🔑 Escanea o ingresa la CURP:", placeholder="Ej. PARL420507MDFTDR06").strip().upper()
             
             if curp_input:
-                registro = df[df["CURP_CLEAN"] == curp_input]
+                # Buscar todas las celdas coincidentes por CURP en la columna 3 (C)
+                celdas_coincidentes = ws.findall(curp_input, in_column=3)
                 
-                if not registro.empty:
-                    fila_info = registro.iloc[0]
+                if celdas_coincidentes:
+                    filas_encontradas = [cell.row for cell in celdas_coincidentes]
                     
-                    nombre = f"{fila_info.get('NOMBRE', '')} {fila_info.get('APELLIDO 1', '')} {fila_info.get('APELLIDO 2', '')}".strip()
-                    estatus_actual = str(fila_info.get("ESTATUS", "")).strip()
-                    folio_actual = str(fila_info.get("FOLIO", "")).strip()
-                    id_registro = fila_info.get("ID", "")
-                    programa = fila_info.get("PROGAMA", fila_info.get("PROGRAMA", ""))
+                    # SI HAY DUPLICADOS -> APLICAR REGLA DE DEPURACIÓN
+                    if len(filas_encontradas) > 1:
+                        st.warning(f"⚠️ Se detectaron **{len(filas_encontradas)} registros duplicados** para la CURP `{curp_input}`.")
+                        
+                        # Recolectar estatus de cada fila encontrada
+                        info_filas = []
+                        for f in filas_encontradas:
+                            val_estatus = str(ws.cell(f, 7).value or "").strip()
+                            info_filas.append({"fila": f, "estatus": val_estatus})
+                        
+                        # Separar capturados y en blanco
+                        capturados = [x for x in info_filas if "CAPTURADO" in x["estatus"].upper()]
+                        en_blanco = [x for x in info_filas if "CAPTURADO" not in x["estatus"].upper()]
+                        
+                        # Determinar cuáles se deben borrar
+                        filas_a_borrar = []
+                        if len(capturados) > 0:
+                            # Si ya hay capturado(s), se borran TODOS los que están en blanco
+                            filas_a_borrar = [x["fila"] for x in en_blanco]
+                        else:
+                            # Si TODOS están en blanco, dejamos la primera fila y borramos el resto de duplicados
+                            filas_a_borrar = [x["fila"] for x in en_blanco[1:]]
+                        
+                        if filas_a_borrar:
+                            if st.button("🧹 Limpiar duplicados automáticamente"):
+                                # Se borran de abajo hacia arriba para mantener intactos los índices de fila arriba
+                                for f in sorted(filas_a_borrar, reverse=True):
+                                    ws.delete_rows(f)
+                                st.success(f"Se eliminaron {len(filas_a_borrar)} registro(s) duplicado(s) sobrante(s).")
+                                st.cache_data.clear()
+                                st.rerun()
+
+                    # Re-obtener la celda activa principal tras la evaluación
+                    celda_principal = ws.find(curp_input, in_column=3)
+                    fila_real = celda_principal.row
+                    
+                    valores_fila = ws.row_values(fila_real)
+                    
+                    def get_val(idx):
+                        return valores_fila[idx].strip() if len(valores_fila) > idx else ""
+                    
+                    programa = get_val(0)
+                    id_registro = get_val(1)
+                    curp_val = get_val(2)
+                    nombre = f"{get_val(3)} {get_val(4)} {get_val(5)}".strip()
+                    estatus_actual = get_val(6)
+                    folio_actual = get_val(7)
                     
                     st.divider()
                     
@@ -73,9 +116,10 @@ if gc:
                         with col_info:
                             st.markdown("### Datos del Beneficiario")
                             st.write(f"**Nombre:** {nombre}")
-                            st.write(f"**CURP:** {curp_input}")
+                            st.write(f"**CURP:** {curp_val}")
                             st.write(f"**ID:** {id_registro}")
                             st.write(f"**Programa:** {programa}")
+                            st.write(f"**Fila en Sheets:** `{fila_real}`")
                             st.write(f"**Estatus actual en Columna G:** `{estatus_actual if estatus_actual else 'Vacío'}`")
                         
                         with col_form:
@@ -86,29 +130,20 @@ if gc:
                                 
                                 if submit:
                                     try:
-                                        # Búsqueda en vivo de la fila exacta en la columna C (CURP)
-                                        celda_encontrada = ws.find(curp_input, in_column=3)
+                                        ws.update_cell(fila_real, 7, "✓ Capturado")
+                                        if folio_nuevo:
+                                            ws.update_cell(fila_real, 8, folio_nuevo)
                                         
-                                        if celda_encontrada:
-                                            fila_real = celda_encontrada.row
-                                            
-                                            # Actualiza exactamente esa fila en Columna 7 (G) y Columna 8 (H)
-                                            ws.update_cell(fila_real, 7, "✓ Capturado")
-                                            if folio_nuevo:
-                                                ws.update_cell(fila_real, 8, folio_nuevo)
-                                            
-                                            st.success(f"¡Se escribió '✓ Capturado' exitosamente en la fila {fila_real} de Google Sheets!")
-                                            st.cache_data.clear()
-                                            st.rerun()
-                                        else:
-                                            st.error("No se pudo hallar la celda exacta en Google Sheets.")
+                                        st.success(f"¡Se actualizó la fila {fila_real} en Google Sheets!")
+                                        st.cache_data.clear()
+                                        st.rerun()
                                     except Exception as err:
                                         st.error(f"Error al escribir en Google Sheets: {err}")
                     else:
                         st.subheader("🔵 Registro Ya Capturado")
                         
                         c1, c2, c3, c4 = st.columns(4)
-                        c1.metric("CURP", curp_input)
+                        c1.metric("CURP", curp_val)
                         c2.metric("Nombre", nombre)
                         c3.metric("Estatus (G)", estatus_actual)
                         c4.metric("Folio Asignado (H)", folio_actual if folio_actual else "Sin Folio")
