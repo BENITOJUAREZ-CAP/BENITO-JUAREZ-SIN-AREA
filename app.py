@@ -47,7 +47,6 @@ if gc:
             headers = [str(h).strip() for h in datos[0]]
             df = pd.DataFrame(datos[1:], columns=headers)
             
-            # Limpieza de la columna CURP para búsqueda exacta
             df["CURP"] = df["CURP"].astype(str).str.strip().str.upper()
             
             curp_busqueda = st.text_input("🔑 Ingresa o escanea la CURP a consultar:").strip().upper()
@@ -61,23 +60,27 @@ if gc:
                     
                     nombre_completo = f"{fila_data.get('NOMBRE', '')} {fila_data.get('APELLIDO 1', '')} {fila_data.get('APELLIDO 2', '')}".strip()
                     
-                    # Obtenemos el texto de la columna G quitando espacios
                     estatus_celda = str(fila_data.get("ESTATUS", "")).strip()
+                    estatus_upper = estatus_celda.upper()
                     folio_val = str(fila_data.get("FOLIO", "")).strip()
                     
                     st.divider()
                     
-                    # VERIFICACIÓN: ¿La celda de la columna G está totalmente en blanco?
-                    esta_en_blanco = (estatus_celda == "") or (estatus_celda.lower() in ["none", "nan", "null"])
+                    # VALIDACIÓN: Permite capturar si la columna G está en blanco O si dice "NO CAPTURADO"
+                    esta_vacia = (estatus_celda == "") or (estatus_celda.lower() in ["none", "nan", "null"])
+                    es_no_capturado = "NO CAPTURADO" in estatus_upper
                     
-                    if esta_en_blanco:
+                    permite_capturar = esta_vacia or es_no_capturado
+                    
+                    if permite_capturar:
                         # ---------------------------------------------------------
-                        # PASO 1: COLUMNA G EN BLANCO -> OPCIÓN DE CAPTURAR
+                        # CASO 1: EN BLANCO O "NO CAPTURADO" -> PERMITE CAPTURAR
                         # ---------------------------------------------------------
-                        st.warning("⚠️ **COLUMNA G EN BLANCO: OPCIÓN DE CAPTURA DISPONIBLE**")
+                        st.warning("⚠️ **REGISTRO DISPONIBLE PARA CAPTURAR**")
                         
                         st.markdown(f"**Nombre:** {nombre_completo}")
                         st.markdown(f"**Programa:** {fila_data.get('PROGAMA', fila_data.get('OGAMA', ''))} | **ID:** {fila_data.get('ID', '')}")
+                        st.markdown(f"**Estatus actual en columna G:** `{estatus_celda if estatus_celda else 'VACÍO'}`")
                         
                         st.divider()
                         
@@ -91,23 +94,23 @@ if gc:
                             btn_capturar = st.button("✅ CAPTURAR", use_container_width=True, key=f"btn_{idx_fila}")
                             
                         if btn_capturar:
-                            num_fila_sheets = idx_fila + 2  # Fila 1 = Encabezados
+                            num_fila_sheets = idx_fila + 2
                             
-                            # Actualiza Columna 7 (G) con "✓ Capturado"
+                            # Escribe "✓ Capturado" en la Columna 7 (G)
                             ws.update_cell(num_fila_sheets, 7, "✓ Capturado")
                             
-                            # Si ingresó folio, lo guarda en la Columna 8 (H)
+                            # Guarda el Folio en la Columna 8 (H) si se ingresó uno
                             if nuevo_folio:
                                 ws.update_cell(num_fila_sheets, 8, nuevo_folio)
                                 
-                            st.success(f"¡Se capturó exitosamente en la fila {num_fila_sheets} de la pestaña CRUCE!")
+                            st.success(f"¡Se actualizó la fila {num_fila_sheets} a '✓ Capturado' correctamente!")
                             st.rerun()
                             
                     else:
                         # ---------------------------------------------------------
-                        # PASO 2: COLUMNA G NO ESTÁ EN BLANCO -> ZONAS PRIORITARIAS BENITO JUÁREZ
+                        # CASO 2: YA TIENE "CAPTURADO" -> ZONAS PRIORITARIAS BENITO JUÁREZ
                         # ---------------------------------------------------------
-                        st.info("ℹ️ **EL REGISTRO YA CONTIENE INFORMACIÓN EN LA COLUMNA G**")
+                        st.info("ℹ️ **EL REGISTRO YA SE ENCUENTRA CAPTURADO**")
                         
                         col1, col2, col3, col4 = st.columns(4)
                         col1.metric("CURP", curp_busqueda)
@@ -117,9 +120,7 @@ if gc:
                         
                         st.divider()
                         st.subheader("📍 Zonas Prioritarias de Benito Juárez")
-                        st.write("Consulta la ubicación o alcaldía/zona prioritaria correspondiente para este registro:")
                         
-                        # Tabla de referencia de colonias / zonas prioritarias en Benito Juárez
                         zonas_bj = pd.DataFrame({
                             "Zona / Sector": ["Sector 1", "Sector 2", "Sector 3", "Sector 4", "Sector 5"],
                             "Colonias Prioritarias": [
@@ -137,4 +138,3 @@ if gc:
                     
     except Exception as e:
         st.error(f"Error al leer/escribir en Google Sheets: {e}")
-    
