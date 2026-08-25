@@ -2,6 +2,7 @@ import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
 import pandas as pd
+from datetime import datetime
 
 st.set_page_config(
     page_title="Sistema de Captura y Verificación",
@@ -50,45 +51,42 @@ if gc:
             curp_input = st.text_input("🔑 Escanea o ingresa la CURP:", placeholder="Ej. PARL420507MDFTDR06").strip().upper()
             
             if curp_input:
-                # Buscar todas las celdas coincidentes por CURP en la columna 3 (C)
+                # Buscar todas las coincidencias exactas en la Columna C (3)
                 celdas_coincidentes = ws.findall(curp_input, in_column=3)
                 
                 if celdas_coincidentes:
                     filas_encontradas = [cell.row for cell in celdas_coincidentes]
                     
-                    # SI HAY DUPLICADOS -> APLICAR REGLA DE DEPURACIÓN
+                    # SI HAY DUPLICADOS -> APLICAR REGLA DE DEPURACIÓN DE DUPLICADOS
                     if len(filas_encontradas) > 1:
                         st.warning(f"⚠️ Se detectaron **{len(filas_encontradas)} registros duplicados** para la CURP `{curp_input}`.")
                         
-                        # Recolectar estatus de cada fila encontrada
                         info_filas = []
                         for f in filas_encontradas:
                             val_estatus = str(ws.cell(f, 7).value or "").strip()
                             info_filas.append({"fila": f, "estatus": val_estatus})
                         
-                        # Separar capturados y en blanco
                         capturados = [x for x in info_filas if "CAPTURADO" in x["estatus"].upper()]
                         en_blanco = [x for x in info_filas if "CAPTURADO" not in x["estatus"].upper()]
                         
-                        # Determinar cuáles se deben borrar
                         filas_a_borrar = []
                         if len(capturados) > 0:
-                            # Si ya hay capturado(s), se borran TODOS los que están en blanco
+                            # Si ya existe un capturado, borramos todos los duplicados vacíos
                             filas_a_borrar = [x["fila"] for x in en_blanco]
                         else:
-                            # Si TODOS están en blanco, dejamos la primera fila y borramos el resto de duplicados
+                            # Si todos están vacíos, dejamos la primera fila y borramos las demás
                             filas_a_borrar = [x["fila"] for x in en_blanco[1:]]
                         
                         if filas_a_borrar:
                             if st.button("🧹 Limpiar duplicados automáticamente"):
-                                # Se borran de abajo hacia arriba para mantener intactos los índices de fila arriba
+                                # Eliminar de abajo hacia arriba para evitar desplazamiento de índices
                                 for f in sorted(filas_a_borrar, reverse=True):
                                     ws.delete_rows(f)
                                 st.success(f"Se eliminaron {len(filas_a_borrar)} registro(s) duplicado(s) sobrante(s).")
                                 st.cache_data.clear()
                                 st.rerun()
 
-                    # Re-obtener la celda activa principal tras la evaluación
+                    # Tomar la celda activa principal
                     celda_principal = ws.find(curp_input, in_column=3)
                     fila_real = celda_principal.row
                     
@@ -103,6 +101,8 @@ if gc:
                     nombre = f"{get_val(3)} {get_val(4)} {get_val(5)}".strip()
                     estatus_actual = get_val(6)
                     folio_actual = get_val(7)
+                    fecha_captura = get_val(8)
+                    capturista_val = get_val(9)
                     
                     st.divider()
                     
@@ -123,22 +123,40 @@ if gc:
                             st.write(f"**Estatus actual en Columna G:** `{estatus_actual if estatus_actual else 'Vacío'}`")
                         
                         with col_form:
-                            st.markdown("### Capturar Folio")
+                            st.markdown("### Capturar Información")
                             with st.form(key=f"form_captura_{curp_input}"):
                                 folio_nuevo = st.text_input("Folio a asignar (opcional):", key="input_folio").strip()
+                                capturista_input = st.text_input("👤 Nombre de la persona que captura (Columna J):", placeholder="Ej. Juan Pérez").strip()
+                                
                                 submit = st.form_submit_button("✅ REGISTRAR Y MARCAR CAPTURADO", use_container_width=True)
                                 
                                 if submit:
-                                    try:
-                                        ws.update_cell(fila_real, 7, "✓ Capturado")
-                                        if folio_nuevo:
-                                            ws.update_cell(fila_real, 8, folio_nuevo)
-                                        
-                                        st.success(f"¡Se actualizó la fila {fila_real} en Google Sheets!")
-                                        st.cache_data.clear()
-                                        st.rerun()
-                                    except Exception as err:
-                                        st.error(f"Error al escribir en Google Sheets: {err}")
+                                    if not capturista_input:
+                                        st.error("Por favor ingresa el nombre de la persona que está realizando la captura.")
+                                    else:
+                                        try:
+                                            # Fecha y hora actual
+                                            fecha_hora_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                            
+                                            # Escribir en Google Sheets:
+                                            # Columna G (7): Estatus
+                                            ws.update_cell(fila_real, 7, "✓ Capturado")
+                                            
+                                            # Columna H (8): Folio
+                                            if folio_nuevo:
+                                                ws.update_cell(fila_real, 8, folio_nuevo)
+                                            
+                                            # Columna I (9): Fecha de Captura
+                                            ws.update_cell(fila_real, 9, fecha_hora_actual)
+                                            
+                                            # Columna J (10): Nombre del Capturista
+                                            ws.update_cell(fila_real, 10, capturista_input)
+                                            
+                                            st.success(f"¡Registro exitoso en la fila {fila_real}! Fecha: {fecha_hora_actual} | Capturó: {capturista_input}")
+                                            st.cache_data.clear()
+                                            st.rerun()
+                                        except Exception as err:
+                                            st.error(f"Error al escribir en Google Sheets: {err}")
                     else:
                         st.subheader("🔵 Registro Ya Capturado")
                         
@@ -147,6 +165,9 @@ if gc:
                         c2.metric("Nombre", nombre)
                         c3.metric("Estatus (G)", estatus_actual)
                         c4.metric("Folio Asignado (H)", folio_actual if folio_actual else "Sin Folio")
+                        
+                        st.write(f"📅 **Fecha de Captura (Columna I):** {fecha_captura if fecha_captura else 'No registrada'}")
+                        st.write(f"👤 **Capturado por (Columna J):** {capturista_val if capturista_val else 'No registrado'}")
                         
                         st.divider()
                         st.subheader("📍 Zonas Prioritarias de Benito Juárez")
