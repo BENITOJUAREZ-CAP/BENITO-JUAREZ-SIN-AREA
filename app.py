@@ -31,33 +31,36 @@ def obtener_cliente_gspread():
         st.error(f"Error de autenticación: {e}")
         return None
 
-# Sin @st.cache_resource para evitar que se congele la llamada al objeto worksheet
-def obtener_worksheet():
+# Carga directa de la hoja a RAM por 60 segundos (Evita reconexiones)
+@st.cache_data(ttl=60)
+def obtener_datos_cache():
+    gc = obtener_cliente_gspread()
+    if gc:
+        try:
+            sh = gc.open_by_key(SPREADSHEET_ID)
+            ws = sh.worksheet(NOMBRE_HOJA)
+            return ws.get_all_values()
+        except Exception as e:
+            st.error(f"Error al conectar con Google Sheets: {e}")
+            return []
+    return []
+
+# Función ligera para cuando se requiere escribir datos en la hoja
+def obtener_worksheet_directo():
     gc = obtener_cliente_gspread()
     if gc:
         sh = gc.open_by_key(SPREADSHEET_ID)
         return sh.worksheet(NOMBRE_HOJA)
     return None
 
-# OPTIMIZACIÓN EN CACHÉ: Guarda los datos en RAM durante 60 segundos
-@st.cache_data(ttl=60)
-def obtener_datos_cache():
-    ws = obtener_worksheet()
-    if ws:
-        return ws.get_all_values()
-    return []
-
 st.title("📋 Verificador de Estatus y Captura (Pestaña CRUCE)")
 
-# Carga rápida en segundo plano con indicador
-with st.spinner("Conectando con Google Sheets y sincronizando base de datos..."):
-    datos = obtener_datos_cache()
+# Carga inicial única usando la memoria caché
+datos = obtener_datos_cache()
 
 if datos:
     try:
-        ws = obtener_worksheet()
-        
-        # FORMULARIO DE BÚSQUEDA (Evita peticiones por cada carácter escrito)
+        # FORMULARIO DE BÚSQUEDA
         with st.form(key="form_busqueda_principal"):
             busqueda_input = st.text_input(
                 "🔑 Escanea o ingresa la CURP o el ID:", 
@@ -67,22 +70,19 @@ if datos:
         
         if busqueda_input:
             es_id = busqueda_input.isdigit()
-            # Columna B es ID (índice 1 en Python), Columna C es CURP (índice 2 en Python)
             col_busqueda_idx = 1 if es_id else 2
             tipo_busqueda = "ID" if es_id else "CURP"
             
-            # Búsqueda instantánea en RAM
+            # Búsqueda ultra rápida directamente en la memoria RAM
             coincidencias = []
             for idx_fila, fila in enumerate(datos):
                 if len(fila) > col_busqueda_idx and fila[col_busqueda_idx].strip().upper() == busqueda_input:
                     coincidencias.append({
-                        "fila_real": idx_fila + 1,  # Fila real en la hoja de Google Sheets
+                        "fila_real": idx_fila + 1,
                         "datos": fila
                     })
             
             if coincidencias:
-                filas_encontradas = [c["fila_real"] for c in coincidencias]
-                
                 # GESTIÓN DE DUPLICADOS EN RAM
                 if len(coincidencias) > 1:
                     st.warning(f"⚠️ Se detectaron **{len(coincidencias)} registros duplicados** para el {tipo_busqueda} `{busqueda_input}`.")
@@ -101,15 +101,17 @@ if datos:
                     else:
                         filas_a_borrar = [x["fila"] for x in en_blanco[1:]]
                     
-                    if filas_a_borrar and ws:
+                    if filas_a_borrar:
                         if st.button("🧹 Limpiar duplicados automáticamente"):
-                            for f in sorted(filas_a_borrar, reverse=True):
-                                ws.delete_rows(f)
-                            st.success(f"Se eliminaron {len(filas_a_borrar)} registro(s) duplicado(s) sobrante(s).")
-                            st.cache_data.clear()
-                            st.rerun()
+                            ws = obtener_worksheet_directo()
+                            if ws:
+                                for f in sorted(filas_a_borrar, reverse=True):
+                                    ws.delete_rows(f)
+                                st.success(f"Se eliminaron {len(filas_a_borrar)} registro(s) duplicado(s).")
+                                st.cache_data.clear()
+                                st.rerun()
 
-                # Tomar la primera coincidencia activa
+                # Tomar la primera coincidencia
                 registro_principal = coincidencias[0]
                 fila_real = registro_principal["fila_real"]
                 valores_fila = registro_principal["datos"]
@@ -150,7 +152,7 @@ if datos:
                             folio_nuevo = st.text_input("Folio a asignar (opcional):", key="input_folio").strip()
                             capturista_input = st.text_input("👤 Nombre de la persona que captura (Columna J):", placeholder="Ej. Juan Pérez").strip()
                             
-                            submit = st.form_submit_button("✅ REGISTRAR Y MARCAR CAPTURADO", use_container_width=True)
+                            submit = st.form_submit_button("✅ REGISTRAR Y MARCAR CAPTURADO")
                             
                             if submit:
                                 if not capturista_input:
@@ -159,20 +161,19 @@ if datos:
                                     try:
                                         fecha_hora_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                         
-                                        # OPTIMIZACIÓN DE ESCRITURA: Actualización en 1 solo bloque (Columnas G, H, I, J)
-                                        # Rango G{fila}:J{fila}
+                                        # Actualización en 1 solo paso a Google Sheets
                                         nuevos_valores = [
                                             [
-                                                "✓ Capturado",             # Columna G (7)
-                                                folio_nuevo if folio_nuevo else folio_actual, # Columna H (8)
-                                                fecha_hora_actual,         # Columna I (9)
-                                                capturista_input           # Columna J (10)
+                                                "✓ Capturado",
+                                                folio_nuevo if folio_nuevo else folio_actual,
+                                                fecha_hora_actual,
+                                                capturista_input
                                             ]
                                         ]
                                         
+                                        ws = obtener_worksheet_directo()
                                         if ws:
                                             ws.update(f"G{fila_real}:J{fila_real}", nuevos_valores)
-                                            
                                             st.success(f"¡Registro exitoso en la fila {fila_real}! Fecha: {fecha_hora_actual} | Capturó: {capturista_input}")
                                             st.cache_data.clear()
                                             st.rerun()
