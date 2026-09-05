@@ -31,54 +31,73 @@ def obtener_cliente_gspread():
         st.error(f"Error de autenticación: {e}")
         return None
 
-gc = obtener_cliente_gspread()
+@st.cache_resource
+def obtener_worksheet():
+    gc = obtener_cliente_gspread()
+    if gc:
+        sh = gc.open_by_key(SPREADSHEET_ID)
+        return sh.worksheet(NOMBRE_HOJA)
+    return None
+
+# OPTIMIZACIÓN 1: Descarga la hoja completa a memoria RAM por 60 segundos
+@st.cache_data(ttl=60)
+def obtener_datos_cache():
+    ws = obtener_worksheet()
+    if ws:
+        return ws.get_all_values()
+    return []
+
+ws = obtener_worksheet()
 
 st.title("📋 Verificador de Estatus y Captura (Pestaña CRUCE)")
 
-if gc:
+if ws:
     try:
-        sh = gc.open_by_key(SPREADSHEET_ID)
-        ws = sh.worksheet(NOMBRE_HOJA)
-        
-        datos = ws.get_all_values()
+        datos = obtener_datos_cache()
         
         if datos:
-            headers = [str(h).strip().upper() for h in datos[0]]
-            df = pd.DataFrame(datos[1:], columns=headers)
-            
-            # Campo de entrada único para CURP o ID
-            busqueda_input = st.text_input("🔑 Escanea o ingresa la CURP o el ID:", placeholder="Ej. PARL420507MDFTDR06 o 13305023").strip().upper()
+            # OPTIMIZACIÓN 2: Uso de st.form para evitar búsquedas automáticas carácter por carácter
+            with st.form(key="form_busqueda_principal"):
+                busqueda_input = st.text_input(
+                    "🔑 Escanea o ingresa la CURP o el ID:", 
+                    placeholder="Ej. PARL420507MDFTDR06 o 13305023"
+                ).strip().upper()
+                btn_buscar = st.form_submit_button("🔍 Buscar")
             
             if busqueda_input:
-                # Determinar si la búsqueda es por ID (solo números) o por CURP (Columna B = 2, Columna C = 3)
                 es_id = busqueda_input.isdigit()
-                col_busqueda = 2 if es_id else 3
+                # Columna B es ID (índice 1 en Python), Columna C es CURP (índice 2 en Python)
+                col_busqueda_idx = 1 if es_id else 2
                 tipo_busqueda = "ID" if es_id else "CURP"
                 
-                # Buscar todas las coincidencias en la columna correspondiente
-                celdas_coincidentes = ws.findall(busqueda_input, in_column=col_busqueda)
+                # Búsqueda instantánea en RAM (Sustituye a ws.findall)
+                coincidencias = []
+                for idx_fila, fila in enumerate(datos):
+                    if len(fila) > col_busqueda_idx and fila[col_busqueda_idx].strip().upper() == busqueda_input:
+                        coincidencias.append({
+                            "fila_real": idx_fila + 1,  # Número de fila real en Google Sheets
+                            "datos": fila
+                        })
                 
-                if celdas_coincidentes:
-                    filas_encontradas = [cell.row for cell in celdas_coincidentes]
+                if coincidencias:
+                    filas_encontradas = [c["fila_real"] for c in coincidencias]
                     
-                    # GESTIÓN DE DUPLICADOS
-                    if len(filas_encontradas) > 1:
-                        st.warning(f"⚠️ Se detectaron **{len(filas_encontradas)} registros duplicados** para el {tipo_busqueda} `{busqueda_input}`.")
+                    # GESTIÓN DE DUPLICADOS (Procesado en RAM)
+                    if len(coincidencias) > 1:
+                        st.warning(f"⚠️ Se detectaron **{len(coincidencias)} registros duplicados** para el {tipo_busqueda} `{busqueda_input}`.")
                         
                         info_filas = []
-                        for f in filas_encontradas:
-                            val_estatus = str(ws.cell(f, 7).value or "").strip()
-                            info_filas.append({"fila": f, "estatus": val_estatus})
+                        for c in coincidencias:
+                            val_estatus = c["datos"][6].strip() if len(c["datos"]) > 6 else ""
+                            info_filas.append({"fila": c["fila_real"], "estatus": val_estatus})
                         
                         capturados = [x for x in info_filas if "CAPTURADO" in x["estatus"].upper()]
                         en_blanco = [x for x in info_filas if "CAPTURADO" not in x["estatus"].upper()]
                         
                         filas_a_borrar = []
                         if len(capturados) > 0:
-                            # Si hay capturado, borramos todos los que están en blanco
                             filas_a_borrar = [x["fila"] for x in en_blanco]
                         else:
-                            # Si todos están en blanco, dejamos la primera fila y borramos el resto
                             filas_a_borrar = [x["fila"] for x in en_blanco[1:]]
                         
                         if filas_a_borrar:
@@ -89,11 +108,10 @@ if gc:
                                 st.cache_data.clear()
                                 st.rerun()
 
-                    # Tomar la primera celda activa válida
-                    celda_principal = ws.find(busqueda_input, in_column=col_busqueda)
-                    fila_real = celda_principal.row
-                    
-                    valores_fila = ws.row_values(fila_real)
+                    # Tomar la primera coincidencia activa
+                    registro_principal = coincidencias[0]
+                    fila_real = registro_principal["fila_real"]
+                    valores_fila = registro_principal["datos"]
                     
                     def get_val(idx):
                         return valores_fila[idx].strip() if len(valores_fila) > idx else ""
@@ -140,17 +158,13 @@ if gc:
                                         try:
                                             fecha_hora_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                             
-                                            # Columna G (7): Estatus
+                                            # Escritura directa únicamente al guardar la captura
                                             ws.update_cell(fila_real, 7, "✓ Capturado")
                                             
-                                            # Columna H (8): Folio
                                             if folio_nuevo:
                                                 ws.update_cell(fila_real, 8, folio_nuevo)
                                             
-                                            # Columna I (9): Fecha de Captura
                                             ws.update_cell(fila_real, 9, fecha_hora_actual)
-                                            
-                                            # Columna J (10): Nombre del Capturista
                                             ws.update_cell(fila_real, 10, capturista_input)
                                             
                                             st.success(f"¡Registro exitoso en la fila {fila_real}! Fecha: {fecha_hora_actual} | Capturó: {capturista_input}")
