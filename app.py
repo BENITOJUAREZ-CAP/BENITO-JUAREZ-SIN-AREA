@@ -48,21 +48,22 @@ def obtener_datos_cache():
         return ws.get_all_values()
     return []
 
-# Carga dinámica de las opciones del CATÁLOGO
+# Carga dinámica de las opciones del CATÁLOGO con opción Opcional al inicio
 @st.cache_data(ttl=300)
 def obtener_opciones_catalogo():
+    opciones_base = ["-- Seleccionar Incidencia (Opcional) --"]
     try:
         ws_cat = obtener_worksheet(HOJA_CATALOGO)
         if ws_cat:
             col_a = ws_cat.col_values(1)
-            # Omite el encabezado ("CATALOGO") y valores vacíos
-            opciones = [x.strip() for x in col_a[1:] if x.strip()]
-            if opciones:
-                return opciones
+            opciones_hoja = [x.strip() for x in col_a[1:] if x.strip()]
+            if opciones_hoja:
+                return opciones_base + opciones_hoja
     except Exception:
         pass
-    # Opciones de respaldo en caso de fallo de lectura de la pestaña
-    return [
+    
+    # Opciones de respaldo en caso de no conectar a la pestaña
+    return opciones_base + [
         "OTRA ALCALDIA",
         "OTRO ESTADO",
         "SIN DATOS",
@@ -141,7 +142,7 @@ if ws:
                     curp_val = get_val(2)
                     nombre = f"{get_val(3)} {get_val(4)} {get_val(5)}".strip()
                     estatus_actual = get_val(6)
-                    incidencia_actual = get_val(7)
+                    col_h_actual = get_val(7)
                     fecha_captura = get_val(8)
                     capturista_val = get_val(9)
                     
@@ -166,12 +167,15 @@ if ws:
                         with col_form:
                             st.markdown("### Capturar Información")
                             with st.form(key=f"form_captura_{busqueda_input}"):
-                                # DESPLEGABLE CON EL CATÁLOGO EN LUGAR DE TEXTO
+                                folio_nuevo = st.text_input("Folio a asignar (opcional):", key="input_folio").strip()
+                                
+                                # SELECCIÓN OPCIONAL DEL CATÁLOGO
                                 incidencia_seleccionada = st.selectbox(
-                                    "📌 Selecciona la Incidencia / Observación (Columna H):",
+                                    "📌 Opciones del Catálogo / Incidencia (Opcional):",
                                     options=opciones_catalogo,
                                     index=0
                                 )
+                                
                                 capturista_input = st.text_input("👤 Nombre de la persona que captura (Columna J):", placeholder="Ej. Juan Pérez").strip()
                                 
                                 submit = st.form_submit_button("✅ REGISTRAR Y MARCAR CAPTURADO", use_container_width=True)
@@ -183,13 +187,23 @@ if ws:
                                         try:
                                             fecha_hora_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                             
+                                            # Determinar qué guardar en la Columna H:
+                                            # Prioridad 1: Folio ingresado manualmente
+                                            # Prioridad 2: Incidencia del catálogo si seleccionaron una
+                                            # Caso 3: Vacío
+                                            val_col_h = ""
+                                            if folio_nuevo:
+                                                val_col_h = folio_nuevo
+                                            elif incidencia_seleccionada and not incidencia_seleccionada.startswith("--"):
+                                                val_col_h = incidencia_seleccionada
+                                            
                                             # Guardado en Google Sheets
                                             ws.update_cell(fila_real, 7, "✓ Capturado")
-                                            ws.update_cell(fila_real, 8, incidencia_seleccionada)
+                                            ws.update_cell(fila_real, 8, val_col_h)
                                             ws.update_cell(fila_real, 9, fecha_hora_actual)
                                             ws.update_cell(fila_real, 10, capturista_input)
                                             
-                                            st.success(f"¡Registro exitoso en la fila {fila_real}! Incidencia: '{incidencia_seleccionada}' | Capturó: {capturista_input}")
+                                            st.success(f"¡Registro exitoso en la fila {fila_real}! Registrado: '{val_col_h if val_col_h else 'Sin Folio/Incidencia'}' | Capturó: {capturista_input}")
                                             st.cache_data.clear()
                                             st.rerun()
                                         except Exception as err:
@@ -203,7 +217,7 @@ if ws:
                         c3.metric("Nombre", nombre)
                         c4.metric("Estatus (G)", estatus_actual)
                         
-                        st.write(f"📌 **Incidencia Registrada (Columna H):** {incidencia_actual if incidencia_actual else 'Sin Registro'}")
+                        st.write(f"📋 **Folio / Incidencia (Columna H):** {col_h_actual if col_h_actual else 'Sin Registro'}")
                         st.write(f"📅 **Fecha de Captura (Columna I):** {fecha_captura if fecha_captura else 'No registrada'}")
                         st.write(f"👤 **Capturado por (Columna J):** {capturista_val if capturista_val else 'No registrado'}")
                         
