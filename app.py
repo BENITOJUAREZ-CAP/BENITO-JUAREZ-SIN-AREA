@@ -48,8 +48,8 @@ def obtener_datos_cache():
         return ws.get_all_values()
     return []
 
-# Carga dinámica de las opciones del CATÁLOGO con opción Opcional al inicio
-@st.cache_data(ttl=300)
+# Carga dinámica de las opciones del CATÁLOGO (Actualizado a 60s)
+@st.cache_data(ttl=60)
 def obtener_opciones_catalogo():
     opciones_base = ["-- Seleccionar Incidencia (Opcional) --"]
     try:
@@ -62,7 +62,7 @@ def obtener_opciones_catalogo():
     except Exception:
         pass
     
-    # Opciones de respaldo en caso de no conectar a la pestaña
+    # Opciones de respaldo en caso de no conectar temporalmente a la pestaña
     return opciones_base + [
         "OTRA ALCALDIA",
         "OTRO ESTADO",
@@ -70,7 +70,8 @@ def obtener_opciones_catalogo():
         "ERROR RENAPO",
         "NO SE ENCONTRO INFO PARA ESTA CURP",
         "YA EXISTE REGISTRO CON ESTA CURP",
-        "YA EXISTE REGISTRO CON ESTA CURP EL PADRON"
+        "YA EXISTE REGISTRO CON ESTA CURP EL PADRON",
+        "LA CURP NO PERTENECE A LA ENTIDAD DEL USUARIO"
     ]
 
 ws = obtener_worksheet(NOMBRE_HOJA)
@@ -104,7 +105,6 @@ if ws:
                         })
                 
                 if coincidencias:
-                    # GESTIÓN DE DUPLICADOS EN RAM
                     if len(coincidencias) > 1:
                         st.warning(f"⚠️ Se detectaron **{len(coincidencias)} registros duplicados** para el {tipo_busqueda} `{busqueda_input}`.")
                         
@@ -169,7 +169,6 @@ if ws:
                             with st.form(key=f"form_captura_{busqueda_input}"):
                                 folio_nuevo = st.text_input("Folio a asignar (opcional):", key="input_folio").strip()
                                 
-                                # SELECCIÓN OPCIONAL DEL CATÁLOGO
                                 incidencia_seleccionada = st.selectbox(
                                     "📌 Opciones del Catálogo / Incidencia (Opcional):",
                                     options=opciones_catalogo,
@@ -187,17 +186,12 @@ if ws:
                                         try:
                                             fecha_hora_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                             
-                                            # Determinar qué guardar en la Columna H:
-                                            # Prioridad 1: Folio ingresado manualmente
-                                            # Prioridad 2: Incidencia del catálogo si seleccionaron una
-                                            # Caso 3: Vacío
                                             val_col_h = ""
                                             if folio_nuevo:
                                                 val_col_h = folio_nuevo
                                             elif incidencia_seleccionada and not incidencia_seleccionada.startswith("--"):
                                                 val_col_h = incidencia_seleccionada
                                             
-                                            # Guardado en Google Sheets
                                             ws.update_cell(fila_real, 7, "✓ Capturado")
                                             ws.update_cell(fila_real, 8, val_col_h)
                                             ws.update_cell(fila_real, 9, fecha_hora_actual)
