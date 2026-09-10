@@ -12,6 +12,7 @@ st.set_page_config(
 
 SPREADSHEET_ID = "1gzkpEijOVCOUqDjkNlyAQRIGpyqH_2j1H4rWGe2NTgM"
 NOMBRE_HOJA = "CRUCE"
+HOJA_CATALOGO = "CATALOGO"
 
 SCOPE = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -32,31 +33,55 @@ def obtener_cliente_gspread():
         return None
 
 @st.cache_resource
-def obtener_worksheet():
+def obtener_worksheet(nombre_pestana):
     gc = obtener_cliente_gspread()
     if gc:
         sh = gc.open_by_key(SPREADSHEET_ID)
-        return sh.worksheet(NOMBRE_HOJA)
+        return sh.worksheet(nombre_pestana)
     return None
 
-# OPTIMIZACIÓN 1: Descarga la hoja completa a memoria RAM por 60 segundos
+# Carga de datos de la pestaña CRUCE en RAM
 @st.cache_data(ttl=60)
 def obtener_datos_cache():
-    ws = obtener_worksheet()
+    ws = obtener_worksheet(NOMBRE_HOJA)
     if ws:
         return ws.get_all_values()
     return []
 
-ws = obtener_worksheet()
+# Carga dinámica de las opciones del CATÁLOGO
+@st.cache_data(ttl=300)
+def obtener_opciones_catalogo():
+    try:
+        ws_cat = obtener_worksheet(HOJA_CATALOGO)
+        if ws_cat:
+            col_a = ws_cat.col_values(1)
+            # Omite el encabezado ("CATALOGO") y valores vacíos
+            opciones = [x.strip() for x in col_a[1:] if x.strip()]
+            if opciones:
+                return opciones
+    except Exception:
+        pass
+    # Opciones de respaldo en caso de fallo de lectura de la pestaña
+    return [
+        "OTRA ALCALDIA",
+        "OTRO ESTADO",
+        "SIN DATOS",
+        "ERROR RENAPO",
+        "NO SE ENCONTRO INFO PARA ESTA CURP",
+        "YA EXISTE REGISTRO CON ESTA CURP",
+        "YA EXISTE REGISTRO CON ESTA CURP EL PADRON"
+    ]
+
+ws = obtener_worksheet(NOMBRE_HOJA)
 
 st.title("📋 Verificador de Estatus y Captura (Pestaña CRUCE)")
 
 if ws:
     try:
         datos = obtener_datos_cache()
+        opciones_catalogo = obtener_opciones_catalogo()
         
         if datos:
-            # OPTIMIZACIÓN 2: Uso de st.form para evitar búsquedas automáticas carácter por carácter
             with st.form(key="form_busqueda_principal"):
                 busqueda_input = st.text_input(
                     "🔑 Escanea o ingresa la CURP o el ID:", 
@@ -66,23 +91,19 @@ if ws:
             
             if busqueda_input:
                 es_id = busqueda_input.isdigit()
-                # Columna B es ID (índice 1 en Python), Columna C es CURP (índice 2 en Python)
                 col_busqueda_idx = 1 if es_id else 2
                 tipo_busqueda = "ID" if es_id else "CURP"
                 
-                # Búsqueda instantánea en RAM (Sustituye a ws.findall)
                 coincidencias = []
                 for idx_fila, fila in enumerate(datos):
                     if len(fila) > col_busqueda_idx and fila[col_busqueda_idx].strip().upper() == busqueda_input:
                         coincidencias.append({
-                            "fila_real": idx_fila + 1,  # Número de fila real en Google Sheets
+                            "fila_real": idx_fila + 1,
                             "datos": fila
                         })
                 
                 if coincidencias:
-                    filas_encontradas = [c["fila_real"] for c in coincidencias]
-                    
-                    # GESTIÓN DE DUPLICADOS (Procesado en RAM)
+                    # GESTIÓN DE DUPLICADOS EN RAM
                     if len(coincidencias) > 1:
                         st.warning(f"⚠️ Se detectaron **{len(coincidencias)} registros duplicados** para el {tipo_busqueda} `{busqueda_input}`.")
                         
@@ -108,7 +129,6 @@ if ws:
                                 st.cache_data.clear()
                                 st.rerun()
 
-                    # Tomar la primera coincidencia activa
                     registro_principal = coincidencias[0]
                     fila_real = registro_principal["fila_real"]
                     valores_fila = registro_principal["datos"]
@@ -121,7 +141,7 @@ if ws:
                     curp_val = get_val(2)
                     nombre = f"{get_val(3)} {get_val(4)} {get_val(5)}".strip()
                     estatus_actual = get_val(6)
-                    folio_actual = get_val(7)
+                    incidencia_actual = get_val(7)
                     fecha_captura = get_val(8)
                     capturista_val = get_val(9)
                     
@@ -146,7 +166,12 @@ if ws:
                         with col_form:
                             st.markdown("### Capturar Información")
                             with st.form(key=f"form_captura_{busqueda_input}"):
-                                folio_nuevo = st.text_input("Folio a asignar (opcional):", key="input_folio").strip()
+                                # DESPLEGABLE CON EL CATÁLOGO EN LUGAR DE TEXTO
+                                incidencia_seleccionada = st.selectbox(
+                                    "📌 Selecciona la Incidencia / Observación (Columna H):",
+                                    options=opciones_catalogo,
+                                    index=0
+                                )
                                 capturista_input = st.text_input("👤 Nombre de la persona que captura (Columna J):", placeholder="Ej. Juan Pérez").strip()
                                 
                                 submit = st.form_submit_button("✅ REGISTRAR Y MARCAR CAPTURADO", use_container_width=True)
@@ -158,16 +183,13 @@ if ws:
                                         try:
                                             fecha_hora_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                             
-                                            # Escritura directa únicamente al guardar la captura
+                                            # Guardado en Google Sheets
                                             ws.update_cell(fila_real, 7, "✓ Capturado")
-                                            
-                                            if folio_nuevo:
-                                                ws.update_cell(fila_real, 8, folio_nuevo)
-                                            
+                                            ws.update_cell(fila_real, 8, incidencia_seleccionada)
                                             ws.update_cell(fila_real, 9, fecha_hora_actual)
                                             ws.update_cell(fila_real, 10, capturista_input)
                                             
-                                            st.success(f"¡Registro exitoso en la fila {fila_real}! Fecha: {fecha_hora_actual} | Capturó: {capturista_input}")
+                                            st.success(f"¡Registro exitoso en la fila {fila_real}! Incidencia: '{incidencia_seleccionada}' | Capturó: {capturista_input}")
                                             st.cache_data.clear()
                                             st.rerun()
                                         except Exception as err:
@@ -181,7 +203,7 @@ if ws:
                         c3.metric("Nombre", nombre)
                         c4.metric("Estatus (G)", estatus_actual)
                         
-                        st.write(f"📋 **Folio Asignado (H):** {folio_actual if folio_actual else 'Sin Folio'}")
+                        st.write(f"📌 **Incidencia Registrada (Columna H):** {incidencia_actual if incidencia_actual else 'Sin Registro'}")
                         st.write(f"📅 **Fecha de Captura (Columna I):** {fecha_captura if fecha_captura else 'No registrada'}")
                         st.write(f"👤 **Capturado por (Columna J):** {capturista_val if capturista_val else 'No registrado'}")
                         
