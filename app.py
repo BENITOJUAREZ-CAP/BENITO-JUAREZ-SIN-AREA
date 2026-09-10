@@ -40,7 +40,6 @@ def obtener_worksheet(nombre_pestana):
         return sh.worksheet(nombre_pestana)
     return None
 
-# Carga de datos de la pestaña CRUCE en RAM
 @st.cache_data(ttl=60)
 def obtener_datos_cache():
     ws = obtener_worksheet(NOMBRE_HOJA)
@@ -48,10 +47,9 @@ def obtener_datos_cache():
         return ws.get_all_values()
     return []
 
-# Carga dinámica de las opciones del CATÁLOGO (Actualizado a 60s)
 @st.cache_data(ttl=60)
 def obtener_opciones_catalogo():
-    opciones_base = ["-- Seleccionar Incidencia (Opcional) --"]
+    opciones_base = ["-- Sin Incidencia (Usar Folio) --"]
     try:
         ws_cat = obtener_worksheet(HOJA_CATALOGO)
         if ws_cat:
@@ -62,7 +60,6 @@ def obtener_opciones_catalogo():
     except Exception:
         pass
     
-    # Opciones de respaldo en caso de no conectar temporalmente a la pestaña
     return opciones_base + [
         "OTRA ALCALDIA",
         "OTRO ESTADO",
@@ -167,7 +164,7 @@ if ws:
                         with col_form:
                             st.markdown("### Capturar Información")
                             with st.form(key=f"form_captura_{busqueda_input}"):
-                                folio_nuevo = st.text_input("Folio a asignar (opcional):", key="input_folio").strip()
+                                folio_nuevo = st.text_input("🔢 Folio a asignar (opcional):", key="input_folio").strip()
                                 
                                 incidencia_seleccionada = st.selectbox(
                                     "📌 Opciones del Catálogo / Incidencia (Opcional):",
@@ -175,13 +172,18 @@ if ws:
                                     index=0
                                 )
                                 
-                                capturista_input = st.text_input("👤 Nombre de la persona que captura (Columna J):", placeholder="Ej. Juan Pérez").strip()
+                                # CAMPO OBLIGATORIO: COLUMNA J
+                                capturista_input = st.text_input(
+                                    "👤 Nombre de la persona que captura (Columna J) - *OBLIGATORIO*:", 
+                                    placeholder="Ej. Juan Pérez"
+                                ).strip()
                                 
                                 submit = st.form_submit_button("✅ REGISTRAR Y MARCAR CAPTURADO", use_container_width=True)
                                 
                                 if submit:
+                                    # VALIDACIÓN RÍGIDA DE LA COLUMNA J
                                     if not capturista_input:
-                                        st.error("Por favor ingresa el nombre de la persona que está realizando la captura.")
+                                        st.error("❌ OBLIGATORIO: Debes ingresar el nombre de la persona que realiza la captura (Columna J).")
                                     else:
                                         try:
                                             fecha_hora_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -192,12 +194,17 @@ if ws:
                                             elif incidencia_seleccionada and not incidencia_seleccionada.startswith("--"):
                                                 val_col_h = incidencia_seleccionada
                                             
-                                            ws.update_cell(fila_real, 7, "✓ Capturado")
-                                            ws.update_cell(fila_real, 8, val_col_h)
-                                            ws.update_cell(fila_real, 9, fecha_hora_actual)
-                                            ws.update_cell(fila_real, 10, capturista_input)
+                                            # ESCRITURA EN UN SOLO BLOQUE (G a J)
+                                            ws.update(f"G{fila_real}:J{fila_real}", [
+                                                [
+                                                    "✓ Capturado",
+                                                    val_col_h,
+                                                    fecha_hora_actual,
+                                                    capturista_input
+                                                ]
+                                            ])
                                             
-                                            st.success(f"¡Registro exitoso en la fila {fila_real}! Registrado: '{val_col_h if val_col_h else 'Sin Folio/Incidencia'}' | Capturó: {capturista_input}")
+                                            st.success(f"¡Registro exitoso en la fila {fila_real}! Capturó: {capturista_input} | Observación (Col H): '{val_col_h}'")
                                             st.cache_data.clear()
                                             st.rerun()
                                         except Exception as err:
