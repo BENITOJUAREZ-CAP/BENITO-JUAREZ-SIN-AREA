@@ -1,4 +1,3 @@
-
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
@@ -48,7 +47,8 @@ def obtener_datos_cache():
         return ws.get_all_values()
     return []
 
-@st.cache_data(ttl=60)
+# Carga de catálogo con caché reducida a 15 segundos para reflejar cambios más rápido
+@st.cache_data(ttl=15)
 def obtener_opciones_catalogo():
     opciones_base = ["-- Sin Incidencia (Usar Folio) --"]
     try:
@@ -61,6 +61,7 @@ def obtener_opciones_catalogo():
     except Exception:
         pass
     
+    # Lista de respaldo actualizada según la última imagen
     return opciones_base + [
         "OTRA ALCALDIA",
         "OTRO ESTADO",
@@ -68,9 +69,17 @@ def obtener_opciones_catalogo():
         "ERROR RENAPO",
         "NO SE ENCONTRO INFO PARA ESTA CURP",
         "YA EXISTE REGISTRO CON ESTA CURP",
-        "YA EXISTE REGISTRO CON ESTA CURP EL PADRON",
+        "ERROR AL VALIDAR EN EL PADRON",
         "LA CURP NO PERTENECE A LA ENTIDAD DEL USUARIO"
     ]
+
+# BOTÓN EN LA BARRA LATERAL PARA REFRESCAR CATÁLOGO AL INSTANTE
+with st.sidebar:
+    st.header("⚙️ Herramientas")
+    if st.button("🔄 Actualizar Catálogo Ahora"):
+        st.cache_data.clear()
+        st.success("¡Catálogo actualizado desde Google Sheets!")
+        st.rerun()
 
 ws = obtener_worksheet(NOMBRE_HOJA)
 
@@ -173,7 +182,6 @@ if ws:
                                     index=0
                                 )
                                 
-                                # CAMPO OBLIGATORIO: COLUMNA J
                                 capturista_input = st.text_input(
                                     "👤 Nombre de la persona que captura (Columna J) - *OBLIGATORIO*:", 
                                     placeholder="Ej. Juan Pérez"
@@ -182,7 +190,6 @@ if ws:
                                 submit = st.form_submit_button("✅ REGISTRAR Y MARCAR CAPTURADO", use_container_width=True)
                                 
                                 if submit:
-                                    # VALIDACIÓN RÍGIDA DE LA COLUMNA J
                                     if not capturista_input:
                                         st.error("❌ OBLIGATORIO: Debes ingresar el nombre de la persona que realiza la captura (Columna J).")
                                     else:
@@ -195,7 +202,6 @@ if ws:
                                             elif incidencia_seleccionada and not incidencia_seleccionada.startswith("--"):
                                                 val_col_h = incidencia_seleccionada
                                             
-                                            # ESCRITURA EN UN SOLO BLOQUE (G a J)
                                             ws.update(f"G{fila_real}:J{fila_real}", [
                                                 [
                                                     "✓ Capturado",
