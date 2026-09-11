@@ -10,6 +10,7 @@ st.set_page_config(
     layout="wide"
 )
 
+# CONFIGURACIÓN DE NOMBRES Y HOJA
 SPREADSHEET_ID = "1gzkpEijOVCOUqDjkNlyAQRIGpyqH_2j1H4rWGe2NTgM"
 NOMBRE_HOJA = "CRUCE"
 HOJA_CATALOGO = "CATALOGO"
@@ -48,7 +49,7 @@ def obtener_datos_cache():
         return ws.get_all_values()
     return []
 
-@st.cache_data(ttl=15)
+@st.cache_data(ttl=5)
 def obtener_opciones_catalogo():
     opciones_base = ["-- Seleccionar Incidencia (Opcional) --"]
     try:
@@ -58,21 +59,12 @@ def obtener_opciones_catalogo():
             opciones_hoja = [x.strip() for x in col_a[1:] if x.strip()]
             if opciones_hoja:
                 return opciones_base + opciones_hoja
-    except Exception:
-        pass
+    except Exception as e:
+        st.error(f"Error al leer la pestaña CATALOGO: {e}")
     
-    return opciones_base + [
-        "OTRA ALCALDIA",
-        "OTRO ESTADO",
-        "SIN DATOS",
-        "ERROR RENAPO",
-        "NO SE ENCONTRO INFO PARA ESTA CURP",
-        "YA EXISTE REGISTRO CON ESTA CURP",
-        "ERROR AL VALIDAR EN EL PADRON",
-        "LA CURP NO PERTENECE A LA ENTIDAD DEL USUARIO"
-    ]
+    return opciones_base
 
-@st.cache_data(ttl=15)
+@st.cache_data(ttl=5)
 def obtener_opciones_personal():
     opciones_base = ["-- Selecciona un Capturista --"]
     try:
@@ -82,12 +74,12 @@ def obtener_opciones_personal():
             personal_hoja = [x.strip() for x in col_a[1:] if x.strip()]
             if personal_hoja:
                 return opciones_base + personal_hoja
-    except Exception:
-        pass
+    except Exception as e:
+        st.error(f"Error al leer la pestaña PERSONAL DE CAPTURA: {e}")
     
     return opciones_base
 
-# INICIALIZACIÓN DE VARIABLE DE SESIÓN PARA RECORDAR EL CAPTURISTA
+# INICIALIZACIÓN DE VARIABLE DE SESIÓN PARA RECORDAR EL CAPTURISTA DE FORMA ESTÁTICA
 if "capturista_fijo" not in st.session_state:
     st.session_state.capturista_fijo = "-- Selecciona un Capturista --"
 
@@ -96,7 +88,7 @@ with st.sidebar:
     st.header("⚙️ Herramientas")
     if st.button("🔄 Actualizar Datos, Catálogo y Personal"):
         st.cache_data.clear()
-        st.success("¡Datos actualizados desde Google Sheets!")
+        st.success("¡Datos y catálogos actualizados!")
         st.rerun()
 
 ws = obtener_worksheet(NOMBRE_HOJA)
@@ -116,7 +108,7 @@ with tab_captura:
             opciones_catalogo = obtener_opciones_catalogo()
             opciones_personal = obtener_opciones_personal()
             
-            # CONTROL DE SELECCIÓN DE CAPTURISTA ESTÁTICO (FUERA DEL FORMULARIO DE BÚSQUEDA)
+            # CONTROL DE SELECCIÓN DE CAPTURISTA ESTÁTICO (RECORDAR EN SESIÓN)
             idx_actual = 0
             if st.session_state.capturista_fijo in opciones_personal:
                 idx_actual = opciones_personal.index(st.session_state.capturista_fijo)
@@ -128,11 +120,10 @@ with tab_captura:
                 key="select_capturista_global"
             )
             
-            # Guardamos la selección en la sesión
             st.session_state.capturista_fijo = capturista_seleccionado_fuera
             
             if st.session_state.capturista_fijo and not st.session_state.capturista_fijo.startswith("--"):
-                st.info(f"👤 Capturista activo: **{st.session_state.capturista_fijo}** (se mantendrá guardado para los siguientes registros).")
+                st.info(f"👤 Capturista activo: **{st.session_state.capturista_fijo}** (se mantendrá fijo para los siguientes registros).")
             else:
                 st.warning("⚠️ Por favor selecciona tu nombre antes o durante el registro.")
 
@@ -228,7 +219,6 @@ with tab_captura:
                                         index=0
                                     )
                                     
-                                    # El selector de la captura toma por defecto el valor estático definido
                                     idx_form_pers = 0
                                     if st.session_state.capturista_fijo in opciones_personal:
                                         idx_form_pers = opciones_personal.index(st.session_state.capturista_fijo)
@@ -248,7 +238,6 @@ with tab_captura:
                                             st.error("❌ OBLIGATORIO: Debes seleccionar el nombre de la persona que realiza la captura.")
                                         else:
                                             try:
-                                                # Guardamos la selección para mantenerla estática en la siguiente búsqueda
                                                 st.session_state.capturista_fijo = capturista_seleccionado
                                                 
                                                 fecha_hora_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
