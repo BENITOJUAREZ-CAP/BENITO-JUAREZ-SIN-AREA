@@ -13,6 +13,7 @@ st.set_page_config(
 SPREADSHEET_ID = "1gzkpEijOVCOUqDjkNlyAQRIGpyqH_2j1H4rWGe2NTgM"
 NOMBRE_HOJA = "CRUCE"
 HOJA_CATALOGO = "CATALOGO"
+HOJA_PERSONAL = "PERSONAL DE CAPTURA"
 
 SCOPE = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -49,7 +50,7 @@ def obtener_datos_cache():
 
 @st.cache_data(ttl=15)
 def obtener_opciones_catalogo():
-    opciones_base = ["-- Sin Incidencia (Usar Folio) --"]
+    opciones_base = ["-- Seleccionar Incidencia (Opcional) --"]
     try:
         ws_cat = obtener_worksheet(HOJA_CATALOGO)
         if ws_cat:
@@ -71,10 +72,29 @@ def obtener_opciones_catalogo():
         "LA CURP NO PERTENECE A LA ENTIDAD DEL USUARIO"
     ]
 
+@st.cache_data(ttl=15)
+def obtener_opciones_personal():
+    opciones_base = ["-- Selecciona un Capturista --"]
+    try:
+        ws_pers = obtener_worksheet(HOJA_PERSONAL)
+        if ws_pers:
+            col_a = ws_pers.col_values(1)
+            personal_hoja = [x.strip() for x in col_a[1:] if x.strip()]
+            if personal_hoja:
+                return opciones_base + personal_hoja
+    except Exception:
+        pass
+    
+    return opciones_base
+
+# INICIALIZACIÓN DE VARIABLE DE SESIÓN PARA RECORDAR EL CAPTURISTA
+if "capturista_fijo" not in st.session_state:
+    st.session_state.capturista_fijo = "-- Selecciona un Capturista --"
+
 # BOTÓN EN LA BARRA LATERAL PARA REFRESCAR DATOS AL INSTANTE
 with st.sidebar:
     st.header("⚙️ Herramientas")
-    if st.button("🔄 Actualizar Datos y Catálogo"):
+    if st.button("🔄 Actualizar Datos, Catálogo y Personal"):
         st.cache_data.clear()
         st.success("¡Datos actualizados desde Google Sheets!")
         st.rerun()
@@ -94,7 +114,30 @@ with tab_captura:
         try:
             datos = obtener_datos_cache()
             opciones_catalogo = obtener_opciones_catalogo()
+            opciones_personal = obtener_opciones_personal()
             
+            # CONTROL DE SELECCIÓN DE CAPTURISTA ESTÁTICO (FUERA DEL FORMULARIO DE BÚSQUEDA)
+            idx_actual = 0
+            if st.session_state.capturista_fijo in opciones_personal:
+                idx_actual = opciones_personal.index(st.session_state.capturista_fijo)
+                
+            capturista_seleccionado_fuera = st.selectbox(
+                "👤 Selecciona tu nombre para mantenerlo fijo durante tu turno:",
+                options=opciones_personal,
+                index=idx_actual,
+                key="select_capturista_global"
+            )
+            
+            # Guardamos la selección en la sesión
+            st.session_state.capturista_fijo = capturista_seleccionado_fuera
+            
+            if st.session_state.capturista_fijo and not st.session_state.capturista_fijo.startswith("--"):
+                st.info(f"👤 Capturista activo: **{st.session_state.capturista_fijo}** (se mantendrá guardado para los siguientes registros).")
+            else:
+                st.warning("⚠️ Por favor selecciona tu nombre antes o durante el registro.")
+
+            st.divider()
+
             if datos:
                 with st.form(key="form_busqueda_principal"):
                     busqueda_input = st.text_input(
@@ -179,32 +222,39 @@ with tab_captura:
                             with col_form:
                                 st.markdown("### Capturar Información")
                                 with st.form(key=f"form_captura_{busqueda_input}"):
-                                    folio_nuevo = st.text_input("🔢 Folio a asignar (opcional):", key="input_folio").strip()
-                                    
                                     incidencia_seleccionada = st.selectbox(
                                         "📌 Opciones del Catálogo / Incidencia (Opcional):",
                                         options=opciones_catalogo,
                                         index=0
                                     )
                                     
-                                    capturista_input = st.text_input(
-                                        "👤 Nombre de la persona que captura (Columna J) - *OBLIGATORIO*:", 
-                                        placeholder="Ej. Juan Pérez"
-                                    ).strip()
+                                    # El selector de la captura toma por defecto el valor estático definido
+                                    idx_form_pers = 0
+                                    if st.session_state.capturista_fijo in opciones_personal:
+                                        idx_form_pers = opciones_personal.index(st.session_state.capturista_fijo)
+
+                                    capturista_seleccionado = st.selectbox(
+                                        "👤 Nombre de la persona que captura (Columna J) - *OBLIGATORIO*:",
+                                        options=opciones_personal,
+                                        index=idx_form_pers
+                                    )
                                     
                                     submit = st.form_submit_button("✅ REGISTRAR Y MARCAR CAPTURADO", use_container_width=True)
                                     
                                     if submit:
-                                        if not capturista_input:
-                                            st.error("❌ OBLIGATORIO: Debes ingresar el nombre de la persona que realiza la captura (Columna J).")
+                                        es_capturista_valido = capturista_seleccionado and not capturista_seleccionado.startswith("--")
+                                        
+                                        if not es_capturista_valido:
+                                            st.error("❌ OBLIGATORIO: Debes seleccionar el nombre de la persona que realiza la captura.")
                                         else:
                                             try:
+                                                # Guardamos la selección para mantenerla estática en la siguiente búsqueda
+                                                st.session_state.capturista_fijo = capturista_seleccionado
+                                                
                                                 fecha_hora_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                                 
                                                 val_col_h = ""
-                                                if folio_nuevo:
-                                                    val_col_h = folio_nuevo
-                                                elif incidencia_seleccionada and not incidencia_seleccionada.startswith("--"):
+                                                if incidencia_seleccionada and not incidencia_seleccionada.startswith("--"):
                                                     val_col_h = incidencia_seleccionada
                                                 
                                                 ws.update(f"G{fila_real}:J{fila_real}", [
@@ -212,11 +262,11 @@ with tab_captura:
                                                         "✓ Capturado",
                                                         val_col_h,
                                                         fecha_hora_actual,
-                                                        capturista_input
+                                                        capturista_seleccionado
                                                     ]
                                                 ])
                                                 
-                                                st.success(f"¡Registro exitoso en la fila {fila_real}! Capturó: {capturista_input} | Observación (Col H): '{val_col_h}'")
+                                                st.success(f"¡Registro exitoso en la fila {fila_real}! Capturó: {capturista_seleccionado} | Incidencia (Col H): '{val_col_h}'")
                                                 st.cache_data.clear()
                                                 st.rerun()
                                             except Exception as err:
@@ -230,7 +280,7 @@ with tab_captura:
                             c3.metric("Nombre", nombre)
                             c4.metric("Estatus (G)", estatus_actual)
                             
-                            st.write(f"📋 **Folio / Incidencia (Columna H):** {col_h_actual if col_h_actual else 'Sin Registro'}")
+                            st.write(f"📋 **Incidencia (Columna H):** {col_h_actual if col_h_actual else 'Sin Incidencia'}")
                             st.write(f"📅 **Fecha de Captura (Columna I):** {fecha_captura if fecha_captura else 'No registrada'}")
                             st.write(f"👤 **Capturado por (Columna J):** {capturista_val if capturista_val else 'No registrado'}")
                             
@@ -259,7 +309,6 @@ with tab_captura:
 with tab_reporte:
     st.title("🔒 Acceso Restringido - Reporte Diario")
     
-    # Manejo de sesión para autenticación
     if "autenticado_reporte" not in st.session_state:
         st.session_state.autenticado_reporte = False
         
@@ -273,7 +322,6 @@ with tab_reporte:
             else:
                 st.error("❌ Contraseña incorrecta. Intenta nuevamente.")
     else:
-        # Botón para cerrar sesión dentro del reporte
         col_tit, col_logout = st.columns([4, 1])
         with col_tit:
             st.subheader("📊 Avance Diario de Captura por Persona")
