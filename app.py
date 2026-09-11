@@ -39,7 +39,14 @@ def obtener_worksheet(nombre_pestana):
     gc = obtener_cliente_gspread()
     if gc:
         sh = gc.open_by_key(SPREADSHEET_ID)
-        return sh.worksheet(nombre_pestana)
+        try:
+            return sh.worksheet(nombre_pestana)
+        except Exception:
+            # Búsqueda flexible por si la pestaña tiene acentos o espacios
+            nombre_normalizado = nombre_pestana.strip().upper().replace("Á", "A")
+            for ws_item in sh.worksheets():
+                if ws_item.title.strip().upper().replace("Á", "A") == nombre_normalizado:
+                    return ws_item
     return None
 
 @st.cache_data(ttl=60)
