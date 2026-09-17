@@ -19,6 +19,7 @@ HOJA_PERSONAL = "PERSONAL DE CAPTURA"
 
 # FECHA DE CUMPLEAÑOS (SOLO HOY)
 FECHA_CUMPLE = date(2026, 9, 17)
+INTERVALO_GLOBOS_SEGUNDOS = 300  # 5 minutos
 
 SCOPE = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -96,9 +97,45 @@ def obtener_opciones_personal():
     
     return opciones_base
 
-# INICIALIZACIÓN DE VARIABLE DE SESIÓN PARA RECORDAR EL CAPTURISTA
+# INICIALIZACIÓN DE VARIABLES DE SESIÓN
 if "capturista_fijo" not in st.session_state:
     st.session_state.capturista_fijo = "-- Selecciona un Capturista --"
+
+if "ultimo_cumple_globos" not in st.session_state:
+    st.session_state.ultimo_cumple_globos = 0
+
+def comprobar_y_lanzar_globos():
+    """Lanza los globos y destellos si han pasado más de 5 minutos (300s)."""
+    tiempo_actual = time.time()
+    if tiempo_actual - st.session_state.ultimo_cumple_globos >= INTERVALO_GLOBOS_SEGUNDOS:
+        st.balloons()
+        st.snow()
+        st.session_state.ultimo_cumple_globos = tiempo_actual
+
+def mostrar_tarjeta_cumpleanos():
+    """Muestra una tarjeta de felicitación decorada con audio."""
+    st.markdown("""
+        <div style="
+            background: linear-gradient(135deg, #ff9a9e 0%, #fecfef 50%, #a1c4fd 100%);
+            padding: 22px;
+            border-radius: 18px;
+            box-shadow: 0px 6px 20px rgba(0,0,0,0.12);
+            text-align: center;
+            margin-top: 10px;
+            margin-bottom: 25px;
+            border: 2px solid #ffffff;
+        ">
+            <h1 style="color: #6a1b9a; font-family: 'Georgia', serif; font-size: 32px; margin: 0; font-weight: bold;">
+                👑 ¡Feliz Cumpleaños Paola! 👑
+            </h1>
+            <p style="color: #2c3e50; font-size: 18px; margin-top: 8px; font-weight: 500;">
+                ✨ Que tengas un día increíble lleno de alegrías, sonrisas y muchos éxitos. ¡Te deseamos lo mejor hoy y siempre! 🎂🎈🎉
+            </p>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # Audio de fondo con mañanitas / melodía de cumpleaños
+    st.audio("https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3", format="audio/mp3")
 
 # BOTÓN EN LA BARRA LATERAL PARA REFRESCAR DATOS MANUALMENTE
 with st.sidebar:
@@ -140,11 +177,11 @@ with tab_captura:
             
             st.session_state.capturista_fijo = capturista_seleccionado_fuera
             
-            # CONDICIONAL CUMPLEAÑOS SOLO PARA HOY (SI SE ELIGE PAOLA COMO CAPTURISTA)
+            # CONDICIONAL CUMPLEAÑOS SOLO PARA HOY Y CADA 5 MINUTOS (SI SE ELIGE PAOLA COMO CAPTURISTA)
             es_hoy_cumple = (datetime.now().date() == FECHA_CUMPLE)
             if es_hoy_cumple and "PAOLA" in st.session_state.capturista_fijo.upper():
-                st.balloons()
-                st.success("🎂🎉 ¡FELIZ CUMPLEAÑOS PAOLA! 🥳🎈")
+                comprobar_y_lanzar_globos()
+                mostrar_tarjeta_cumpleanos()
             
             if st.session_state.capturista_fijo and not st.session_state.capturista_fijo.startswith("--"):
                 st.info(f"👤 Capturista activo: **{st.session_state.capturista_fijo}** (se mantendrá fijo para los siguientes registros).")
@@ -244,10 +281,10 @@ with tab_captura:
                                     key=f"select_cat_{busqueda_input}"
                                 )
                                 
-                                # CONDICIONAL CUMPLEAÑOS SOLO PARA HOY (SI SE SELECCIONA EN EL CATÁLOGO)
+                                # CONDICIONAL CUMPLEAÑOS SOLO PARA HOY Y CADA 5 MINUTOS (SI SE SELECCIONA EN EL CATÁLOGO)
                                 if es_hoy_cumple and "PAOLA" in incidencia_seleccionada.upper():
-                                    st.balloons()
-                                    st.success("🎂🎉 ¡FELIZ CUMPLEAÑOS PAOLA! 🥳🎈")
+                                    comprobar_y_lanzar_globos()
+                                    mostrar_tarjeta_cumpleanos()
 
                                 with st.form(key=f"form_captura_{busqueda_input}"):
                                     idx_form_pers = 0
