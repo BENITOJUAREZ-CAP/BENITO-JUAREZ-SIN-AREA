@@ -155,7 +155,6 @@ def mostrar_tarjeta_cumpleanos():
 
   st.write("🎵 **Reproduciendo: Las Mañanitas - Cepillín** 🎶")
 
-  # Enlace directo generado en tu repositorio de GitHub
   url_audio = (
       "https://github.com/user-attachments/files/32356096/mananitas.mp3.mp3"
   )
@@ -347,7 +346,6 @@ with tab_captura:
                     key=f"select_cat_{busqueda_input}",
                 )
 
-                # CONDICIONAL CUMPLEAÑOS SOLO PARA HOY Y CADA 5 MINUTOS (SI SE SELECCIONA EN EL CATÁLOGO)
                 if (
                     es_hoy_cumple
                     and "PAOLA" in incidencia_seleccionada.upper()
@@ -473,10 +471,10 @@ with tab_captura:
       st.error(f"Ocurrió un error al procesar los datos: {e}")
 
 # ---------------------------------------------------------
-# PESTAÑA 2: REPORTE DIARIO POR PERSONA (PROTEGIDO CON CONTRASEÑA)
+# PESTAÑA 2: REPORTE DIARIO Y GENERAL (PROTEGIDO CON CONTRASEÑA)
 # ---------------------------------------------------------
 with tab_reporte:
-  st.title("🔒 Acceso Restringido - Reporte Diario")
+  st.title("🔒 Acceso Restringido - Reporte Diario y General")
 
   if "autenticado_reporte" not in st.session_state:
     st.session_state.autenticado_reporte = False
@@ -495,7 +493,7 @@ with tab_reporte:
   else:
     col_tit, col_logout = st.columns([4, 1])
     with col_tit:
-      st.subheader("📊 Avance Diario de Captura por Persona")
+      st.subheader("📊 Avance General y Diario de Captura")
     with col_logout:
       if st.button("🔒 Cerrar Sesión"):
         st.session_state.autenticado_reporte = False
@@ -505,46 +503,109 @@ with tab_reporte:
     if datos_cruce and len(datos_cruce) > 1:
       registros_capturados = []
       for row in datos_cruce[1:]:
-        if len(row) >= 10:
-          fecha_raw = row[8].strip()
-          capturista = row[9].strip()
-          if fecha_raw and capturista:
-            fecha_corta = fecha_raw.split(" ")[0]
-            registros_capturados.append(
-                {"Fecha": fecha_corta, "Capturista": capturista.upper()}
-            )
+        estatus = row[6].strip() if len(row) > 6 else ""
+        # Verificar si la fila está capturada
+        if "CAPTURADO" in estatus.upper() or estatus == "✓ Capturado":
+          incidencia = (
+              row[7].strip()
+              if len(row) > 7 and row[7].strip()
+              else "SIN INCIDENCIA"
+          )
+          fecha_raw = row[8].strip() if len(row) > 8 else ""
+          capturista = row[9].strip() if len(row) > 9 else "NO REGISTRADO"
+
+          fecha_corta = (
+              fecha_raw.split(" ")[0] if fecha_raw else "SIN FECHA"
+          )
+
+          registros_capturados.append({
+              "Fecha": fecha_corta,
+              "Incidencia": incidencia.upper(),
+              "Capturista": capturista.upper(),
+          })
 
       if registros_capturados:
         df_rep = pd.DataFrame(registros_capturados)
 
+        # 1. MÉTRICAS GENERALES TOTALES
+        total_capturas_historico = len(df_rep)
+
+        st.markdown("### 📌 Resumen General de Captura")
+        m1, m2 = st.columns(2)
+        m1.metric(
+            label="📦 Total Acumulado de Capturas",
+            value=total_capturas_historico,
+        )
+
         fechas_disponibles = sorted(
-            list(df_rep["Fecha"].unique()), reverse=True
-        )
-        fecha_sel = st.selectbox(
-            "📅 Selecciona la fecha a consultar:", options=fechas_disponibles
+            [f for f in df_rep["Fecha"].unique() if f != "SIN FECHA"],
+            reverse=True,
         )
 
-        df_filtrado = df_rep[df_rep["Fecha"] == fecha_sel]
+        if fechas_disponibles:
+          fecha_sel = st.selectbox(
+              "📅 Selecciona la fecha a consultar para el reporte diario:",
+              options=fechas_disponibles,
+          )
+          df_filtrado = df_rep[df_rep["Fecha"] == fecha_sel]
+          m2.metric(
+              label=f"📅 Capturas el {fecha_sel}", value=len(df_filtrado)
+          )
+        else:
+          df_filtrado = df_rep
 
-        conteo = df_filtrado["Capturista"].value_counts().reset_index()
-        conteo.columns = ["Capturista / Persona", "Total Capturados"]
+        st.divider()
 
-        st.metric(
-            label=f"Total de capturas el {fecha_sel}", value=len(df_filtrado)
+        # 2. SECCIÓN DE CATÁLOGO / INCIDENCIAS
+        st.subheader("📋 Conteo por Catálogo de Incidencias (Columna H)")
+
+        # Conteo de catálogo general vs del día
+        conteo_cat_dia = (
+            df_filtrado["Incidencia"].value_counts().reset_index()
         )
+        conteo_cat_dia.columns = ["Incidencia / Catálogo", "Cantidad (Día)"]
+
+        conteo_cat_gen = df_rep["Incidencia"].value_counts().reset_index()
+        conteo_cat_gen.columns = [
+            "Incidencia / Catálogo",
+            "Cantidad (Total Acumulado)",
+        ]
+
+        df_cat_merged = pd.merge(
+            conteo_cat_gen, conteo_cat_dia, on="Incidencia / Catálogo", how="left"
+        ).fillna(0)
+        df_cat_merged["Cantidad (Día)"] = df_cat_merged[
+            "Cantidad (Día)"
+        ].astype(int)
+
+        col_cat_tab, col_cat_graf = st.columns([1, 1], gap="medium")
+
+        with col_cat_tab:
+          st.dataframe(df_cat_merged, use_container_width=True, hide_index=True)
+
+        with col_cat_graf:
+          st.bar_chart(
+              df_cat_merged.set_index("Incidencia / Catálogo")[
+                  ["Cantidad (Día)", "Cantidad (Total Acumulado)"]
+              ]
+          )
+
+        st.divider()
+
+        # 3. SECCIÓN DE RENDIMIENTO POR CAPTURISTA
+        st.subheader("👤 Rendimiento por Capturista")
+
+        conteo_cap = df_filtrado["Capturista"].value_counts().reset_index()
+        conteo_cap.columns = ["Capturista / Persona", "Total Capturados"]
 
         col_tabla, col_grafica = st.columns([1, 1], gap="medium")
 
         with col_tabla:
-          st.subheader("📋 Detalle por Capturista")
-          st.dataframe(conteo, use_container_width=True, hide_index=True)
+          st.dataframe(conteo_cap, use_container_width=True, hide_index=True)
 
         with col_grafica:
-          st.subheader("📈 Gráfico de Rendimiento")
-          st.bar_chart(conteo.set_index("Capturista / Persona"))
+          st.bar_chart(conteo_cap.set_index("Capturista / Persona"))
       else:
-        st.info(
-            "Aún no hay registros capturados con fecha y nombre guardados."
-        )
+        st.info("Aún no hay registros marcados como capturados.")
     else:
       st.warning("No hay datos disponibles en la pestaña CRUCE.")
