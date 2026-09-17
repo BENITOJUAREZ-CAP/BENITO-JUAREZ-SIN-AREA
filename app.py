@@ -113,7 +113,7 @@ def comprobar_y_lanzar_globos():
         st.session_state.ultimo_cumple_globos = tiempo_actual
 
 def mostrar_tarjeta_cumpleanos():
-    """Muestra una tarjeta de felicitación decorada con audio."""
+    """Muestra una tarjeta de felicitación decorada con audio de Las Mañanitas de Cepillín."""
     st.markdown("""
         <div style="
             background: linear-gradient(135deg, #ff9a9e 0%, #fecfef 50%, #a1c4fd 100%);
@@ -134,8 +134,8 @@ def mostrar_tarjeta_cumpleanos():
         </div>
     """, unsafe_allow_html=True)
     
-    # Audio de fondo con mañanitas / melodía de cumpleaños
-    st.audio("https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3", format="audio/mp3")
+    # Audio de Las Mañanitas de Cepillín
+    st.audio("https://ia801503.us.archive.org/15/items/cepillin-las-mananitas/Cepillin%20-%20Las%20Mananitas.mp3", format="audio/mp3")
 
 # BOTÓN EN LA BARRA LATERAL PARA REFRESCAR DATOS MANUALMENTE
 with st.sidebar:
