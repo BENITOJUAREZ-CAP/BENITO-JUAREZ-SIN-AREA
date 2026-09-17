@@ -5,6 +5,7 @@ import gspread
 import pandas as pd
 import streamlit as st
 
+# CONFIGURACIÓN DE PÁGINA
 st.set_page_config(
     page_title="Sistema de Captura y Verificación",
     page_icon="📋",
@@ -117,7 +118,7 @@ if "ultimo_cumple_globos" not in st.session_state:
 
 
 def comprobar_y_lanzar_globos():
-  """Lanza los globos y destellos si han pasado más de 5 minutos (300s)."""
+  """Lanza los globos si han pasado más de 5 minutos (300s)."""
   tiempo_actual = time.time()
   if (
       tiempo_actual - st.session_state.ultimo_cumple_globos
@@ -129,7 +130,7 @@ def comprobar_y_lanzar_globos():
 
 
 def mostrar_tarjeta_cumpleanos():
-  """Muestra una tarjeta de felicitación y reproduce audio de Cepillín desde GitHub."""
+  """Muestra una tarjeta de felicitación y reproduce audio."""
   st.markdown(
       """
         <div style="
@@ -154,7 +155,6 @@ def mostrar_tarjeta_cumpleanos():
   )
 
   st.write("🎵 **Reproduciendo: Las Mañanitas - Cepillín** 🎶")
-
   url_audio = (
       "https://github.com/user-attachments/files/32356096/mananitas.mp3.mp3"
   )
@@ -174,7 +174,7 @@ ws = obtener_worksheet(NOMBRE_HOJA)
 
 # CREACIÓN DE PESTAÑAS PRINCIPALES EN STREAMLIT
 tab_captura, tab_reporte = st.tabs(
-    ["📋 Captura y Verificación", "📊 Reporte Diario por Persona"]
+    ["📋 Captura y Verificación", "📊 Reporte Diario y Catálogo"]
 )
 
 # ---------------------------------------------------------
@@ -203,7 +203,7 @@ with tab_captura:
 
       st.session_state.capturista_fijo = capturista_seleccionado_fuera
 
-      # CONDICIONAL CUMPLEAÑOS SOLO PARA HOY Y CADA 5 MINUTOS (SI SE ELIGE PAOLA COMO CAPTURISTA)
+      # CONDICIONAL CUMPLEAÑOS
       es_hoy_cumple = datetime.now().date() == FECHA_CUMPLE
       if es_hoy_cumple and "PAOLA" in st.session_state.capturista_fijo.upper():
         comprobar_y_lanzar_globos()
@@ -471,10 +471,10 @@ with tab_captura:
       st.error(f"Ocurrió un error al procesar los datos: {e}")
 
 # ---------------------------------------------------------
-# PESTAÑA 2: REPORTE DIARIO Y GENERAL (PROTEGIDO CON CONTRASEÑA)
+# PESTAÑA 2: REPORTE DIARIO, GENERAL Y CONTEO DE CATÁLOGO
 # ---------------------------------------------------------
 with tab_reporte:
-  st.title("🔒 Acceso Restringido - Reporte Diario y General")
+  st.title("🔒 Acceso Restringido - Reporte Diario y Catálogo")
 
   if "autenticado_reporte" not in st.session_state:
     st.session_state.autenticado_reporte = False
@@ -493,7 +493,7 @@ with tab_reporte:
   else:
     col_tit, col_logout = st.columns([4, 1])
     with col_tit:
-      st.subheader("📊 Avance General y Diario de Captura")
+      st.subheader("📊 Avance General, Diario y Catálogo de Incidencias")
     with col_logout:
       if st.button("🔒 Cerrar Sesión"):
         st.session_state.autenticado_reporte = False
@@ -504,7 +504,7 @@ with tab_reporte:
       registros_capturados = []
       for row in datos_cruce[1:]:
         estatus = row[6].strip() if len(row) > 6 else ""
-        # Verificar si la fila está capturada
+        # Verificar registros capturados
         if "CAPTURADO" in estatus.upper() or estatus == "✓ Capturado":
           incidencia = (
               row[7].strip()
@@ -527,13 +527,13 @@ with tab_reporte:
       if registros_capturados:
         df_rep = pd.DataFrame(registros_capturados)
 
-        # 1. MÉTRICAS GENERALES TOTALES
+        # 1. MÉTRICAS GENERALES DE CAPTURA
         total_capturas_historico = len(df_rep)
 
-        st.markdown("### 📌 Resumen General de Captura")
+        st.markdown("### 📌 Resumen General")
         m1, m2 = st.columns(2)
         m1.metric(
-            label="📦 Total Acumulado de Capturas",
+            label="📦 Total Acumulado Capturado",
             value=total_capturas_historico,
         )
 
@@ -544,8 +544,7 @@ with tab_reporte:
 
         if fechas_disponibles:
           fecha_sel = st.selectbox(
-              "📅 Selecciona la fecha a consultar para el reporte diario:",
-              options=fechas_disponibles,
+              "📅 Selecciona la fecha a consultar:", options=fechas_disponibles
           )
           df_filtrado = df_rep[df_rep["Fecha"] == fecha_sel]
           m2.metric(
@@ -556,21 +555,23 @@ with tab_reporte:
 
         st.divider()
 
-        # 2. SECCIÓN DE CATÁLOGO / INCIDENCIAS
-        st.subheader("📋 Conteo por Catálogo de Incidencias (Columna H)")
+        # 2. CONTEO DE CATÁLOGO / INCIDENCIAS (COLUMNA H)
+        st.subheader("📋 Conteo del Catálogo de Incidencias (Columna H)")
 
-        # Conteo de catálogo general vs del día
+        # Conteo del día seleccionado
         conteo_cat_dia = (
             df_filtrado["Incidencia"].value_counts().reset_index()
         )
         conteo_cat_dia.columns = ["Incidencia / Catálogo", "Cantidad (Día)"]
 
+        # Conteo histórico total
         conteo_cat_gen = df_rep["Incidencia"].value_counts().reset_index()
         conteo_cat_gen.columns = [
             "Incidencia / Catálogo",
             "Cantidad (Total Acumulado)",
         ]
 
+        # Fusionar ambas métricas en una tabla
         df_cat_merged = pd.merge(
             conteo_cat_gen, conteo_cat_dia, on="Incidencia / Catálogo", how="left"
         ).fillna(0)
@@ -592,7 +593,7 @@ with tab_reporte:
 
         st.divider()
 
-        # 3. SECCIÓN DE RENDIMIENTO POR CAPTURISTA
+        # 3. RENDIMIENTO POR CAPTURISTA
         st.subheader("👤 Rendimiento por Capturista")
 
         conteo_cap = df_filtrado["Capturista"].value_counts().reset_index()
