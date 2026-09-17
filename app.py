@@ -2,7 +2,7 @@ import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, date
 import time
 
 st.set_page_config(
@@ -16,6 +16,9 @@ SPREADSHEET_ID = "1gzkpEijOVCOUqDjkNlyAQRIGpyqH_2j1H4rWGe2NTgM"
 NOMBRE_HOJA = "CRUCE"
 HOJA_CATALOGO = "CATALOGO"
 HOJA_PERSONAL = "PERSONAL DE CAPTURA"
+
+# FECHA DE CUMPLEAÑOS (SOLO HOY)
+FECHA_CUMPLE = date(2026, 9, 17)
 
 SCOPE = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -52,7 +55,7 @@ def obtener_worksheet(nombre_pestana):
             st.warning(f"Aviso de cuota/conexión al abrir pestaña '{nombre_pestana}': {e}")
     return None
 
-# Caché ajustado a 300 segundos (5 minutos) para evitar sobrepasar límites de cuota (Error 429)
+# Caché a 300s para no exceder cuotas de Google API
 @st.cache_data(ttl=300)
 def obtener_datos_cache():
     ws = obtener_worksheet(NOMBRE_HOJA)
@@ -136,6 +139,12 @@ with tab_captura:
             )
             
             st.session_state.capturista_fijo = capturista_seleccionado_fuera
+            
+            # CONDICIONAL CUMPLEAÑOS SOLO PARA HOY (SI SE ELIGE PAOLA COMO CAPTURISTA)
+            es_hoy_cumple = (datetime.now().date() == FECHA_CUMPLE)
+            if es_hoy_cumple and "PAOLA" in st.session_state.capturista_fijo.upper():
+                st.balloons()
+                st.success("🎂🎉 ¡FELIZ CUMPLEAÑOS PAOLA! 🥳🎈")
             
             if st.session_state.capturista_fijo and not st.session_state.capturista_fijo.startswith("--"):
                 st.info(f"👤 Capturista activo: **{st.session_state.capturista_fijo}** (se mantendrá fijo para los siguientes registros).")
@@ -228,7 +237,6 @@ with tab_captura:
                             with col_form:
                                 st.markdown("### Capturar Información")
                                 
-                                # Selección de catálogo fuera del form para actualizar en vivo el mensaje de cumpleaños
                                 incidencia_seleccionada = st.selectbox(
                                     "📌 Opciones del Catálogo / Incidencia (Opcional):",
                                     options=opciones_catalogo,
@@ -236,8 +244,8 @@ with tab_captura:
                                     key=f"select_cat_{busqueda_input}"
                                 )
                                 
-                                # MENSAJE DE FELIZ CUMPLEAÑOS SI CONTIENE "PAOLA"
-                                if "PAOLA" in incidencia_seleccionada.upper():
+                                # CONDICIONAL CUMPLEAÑOS SOLO PARA HOY (SI SE SELECCIONA EN EL CATÁLOGO)
+                                if es_hoy_cumple and "PAOLA" in incidencia_seleccionada.upper():
                                     st.balloons()
                                     st.success("🎂🎉 ¡FELIZ CUMPLEAÑOS PAOLA! 🥳🎈")
 
