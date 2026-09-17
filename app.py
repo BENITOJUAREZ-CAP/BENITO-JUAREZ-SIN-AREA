@@ -113,7 +113,7 @@ def comprobar_y_lanzar_globos():
         st.session_state.ultimo_cumple_globos = tiempo_actual
 
 def mostrar_tarjeta_cumpleanos():
-    """Muestra una tarjeta de felicitación decorada con audio de Las Mañanitas de Cepillín."""
+    """Muestra una tarjeta de felicitación decorada con audio de Las Mañanitas."""
     st.markdown("""
         <div style="
             background: linear-gradient(135deg, #ff9a9e 0%, #fecfef 50%, #a1c4fd 100%);
@@ -134,9 +134,10 @@ def mostrar_tarjeta_cumpleanos():
         </div>
     """, unsafe_allow_html=True)
     
-    st.write("🎵 **Reproduciendo: Las Mañanitas - Cepillín** 🎶")
-    # Enlace de audio directo
-    st.audio("https://raw.githubusercontent.com/redwilliams/mp3-files/main/cepillin-las-mananitas.mp3", format="audio/mp3")
+    st.write("🎵 **Reproduciendo: Las Mañanitas** 🎶")
+    # Servidor de alta disponibilidad (Soundbank / CDN global libre de restricciones CORS)
+    url_audio = "https://cdn.pixabay.com/download/audio/2022/03/15/audio_c8c8a7051a.mp3?filename=happy-birthday-15203.mp3"
+    st.audio(url_audio, format="audio/mp3")
 
 # BOTÓN EN LA BARRA LATERAL PARA REFRESCAR DATOS MANUALMENTE
 with st.sidebar:
