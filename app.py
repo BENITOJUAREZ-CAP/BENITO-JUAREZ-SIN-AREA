@@ -3,6 +3,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 import pandas as pd
 from datetime import datetime
+import time
 
 st.set_page_config(
     page_title="Sistema de Captura y Verificación",
@@ -38,25 +39,31 @@ def obtener_cliente_gspread():
 def obtener_worksheet(nombre_pestana):
     gc = obtener_cliente_gspread()
     if gc:
-        sh = gc.open_by_key(SPREADSHEET_ID)
         try:
-            return sh.worksheet(nombre_pestana)
-        except Exception:
-            # Búsqueda flexible por si la pestaña tiene acentos o espacios
-            nombre_normalizado = nombre_pestana.strip().upper().replace("Á", "A")
-            for ws_item in sh.worksheets():
-                if ws_item.title.strip().upper().replace("Á", "A") == nombre_normalizado:
-                    return ws_item
+            sh = gc.open_by_key(SPREADSHEET_ID)
+            try:
+                return sh.worksheet(nombre_pestana)
+            except Exception:
+                nombre_normalizado = nombre_pestana.strip().upper().replace("Á", "A")
+                for ws_item in sh.worksheets():
+                    if ws_item.title.strip().upper().replace("Á", "A") == nombre_normalizado:
+                        return ws_item
+        except Exception as e:
+            st.warning(f"Aviso de cuota/conexión al abrir pestaña '{nombre_pestana}': {e}")
     return None
 
-@st.cache_data(ttl=60)
+# Caché ajustado a 300 segundos (5 minutos) para evitar sobrepasar límites de cuota (Error 429)
+@st.cache_data(ttl=300)
 def obtener_datos_cache():
     ws = obtener_worksheet(NOMBRE_HOJA)
     if ws:
-        return ws.get_all_values()
+        try:
+            return ws.get_all_values()
+        except Exception:
+            pass
     return []
 
-@st.cache_data(ttl=5)
+@st.cache_data(ttl=300)
 def obtener_opciones_catalogo():
     opciones_base = ["-- Seleccionar Incidencia (Opcional) --"]
     try:
@@ -67,11 +74,11 @@ def obtener_opciones_catalogo():
             if opciones_hoja:
                 return opciones_base + opciones_hoja
     except Exception as e:
-        st.error(f"Error al leer la pestaña CATALOGO: {e}")
+        st.warning("Usando lista local/caché por límite temporal de peticiones.")
     
     return opciones_base
 
-@st.cache_data(ttl=5)
+@st.cache_data(ttl=300)
 def obtener_opciones_personal():
     opciones_base = ["-- Selecciona un Capturista --"]
     try:
@@ -82,20 +89,21 @@ def obtener_opciones_personal():
             if personal_hoja:
                 return opciones_base + personal_hoja
     except Exception as e:
-        st.error(f"Error al leer la pestaña PERSONAL DE CAPTURA: {e}")
+        st.warning("Usando lista local/caché por límite temporal de peticiones.")
     
     return opciones_base
 
-# INICIALIZACIÓN DE VARIABLE DE SESIÓN PARA RECORDAR EL CAPTURISTA DE FORMA ESTÁTICA
+# INICIALIZACIÓN DE VARIABLE DE SESIÓN PARA RECORDAR EL CAPTURISTA
 if "capturista_fijo" not in st.session_state:
     st.session_state.capturista_fijo = "-- Selecciona un Capturista --"
 
-# BOTÓN EN LA BARRA LATERAL PARA REFRESCAR DATOS AL INSTANTE
+# BOTÓN EN LA BARRA LATERAL PARA REFRESCAR DATOS MANUALMENTE
 with st.sidebar:
     st.header("⚙️ Herramientas")
     if st.button("🔄 Actualizar Datos, Catálogo y Personal"):
         st.cache_data.clear()
-        st.success("¡Datos y catálogos actualizados!")
+        st.success("¡Caché limpiado! Actualizando información...")
+        time.sleep(1)
         st.rerun()
 
 ws = obtener_worksheet(NOMBRE_HOJA)
@@ -115,7 +123,7 @@ with tab_captura:
             opciones_catalogo = obtener_opciones_catalogo()
             opciones_personal = obtener_opciones_personal()
             
-            # CONTROL DE SELECCIÓN DE CAPTURISTA ESTÁTICO (RECORDAR EN SESIÓN)
+            # CONTROL DE SELECCIÓN DE CAPTURISTA ESTÁTICO
             idx_actual = 0
             if st.session_state.capturista_fijo in opciones_personal:
                 idx_actual = opciones_personal.index(st.session_state.capturista_fijo)
@@ -219,13 +227,21 @@ with tab_captura:
                             
                             with col_form:
                                 st.markdown("### Capturar Información")
+                                
+                                # Selección de catálogo fuera del form para actualizar en vivo el mensaje de cumpleaños
+                                incidencia_seleccionada = st.selectbox(
+                                    "📌 Opciones del Catálogo / Incidencia (Opcional):",
+                                    options=opciones_catalogo,
+                                    index=0,
+                                    key=f"select_cat_{busqueda_input}"
+                                )
+                                
+                                # MENSAJE DE FELIZ CUMPLEAÑOS SI CONTIENE "PAOLA"
+                                if "PAOLA" in incidencia_seleccionada.upper():
+                                    st.balloons()
+                                    st.success("🎂🎉 ¡FELIZ CUMPLEAÑOS PAOLA! 🥳🎈")
+
                                 with st.form(key=f"form_captura_{busqueda_input}"):
-                                    incidencia_seleccionada = st.selectbox(
-                                        "📌 Opciones del Catálogo / Incidencia (Opcional):",
-                                        options=opciones_catalogo,
-                                        index=0
-                                    )
-                                    
                                     idx_form_pers = 0
                                     if st.session_state.capturista_fijo in opciones_personal:
                                         idx_form_pers = opciones_personal.index(st.session_state.capturista_fijo)
