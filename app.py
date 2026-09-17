@@ -589,42 +589,72 @@ with tab_reporte:
 
         st.divider()
 
-        # 3. RENDIMIENTO POR CAPTURISTA (DÍA vs TOTAL ACUMULADO)
-        st.subheader("👤 Rendimiento por Capturista")
+        # 3. RENDIMIENTO EXCLUSIVO DEL PERSONAL DE CAPTURA
+        st.subheader("👤 Rendimiento por Personal de Captura")
 
-        # Conteo de lo capturado en el día seleccionado
-        conteo_cap_dia = df_filtrado["Capturista"].value_counts().reset_index()
-        conteo_cap_dia.columns = [
-            "Capturista / Persona",
-            "Total (Día Seleccionado)",
+        # Obtener lista oficial de la hoja PERSONAL DE CAPTURA
+        lista_personal_raw = obtener_opciones_personal()
+        lista_personal_oficial = [
+            p.upper()
+            for p in lista_personal_raw
+            if p and not p.startswith("--")
         ]
 
-        # Conteo histórico acumulado de cada persona
-        conteo_cap_gen = df_rep["Capturista"].value_counts().reset_index()
-        conteo_cap_gen.columns = [
-            "Capturista / Persona",
-            "Total (Acumulado Histórico)",
-        ]
-
-        # Unir ambas tablas
-        df_cap_merged = pd.merge(
-            conteo_cap_gen, conteo_cap_dia, on="Capturista / Persona", how="left"
-        ).fillna(0)
-        df_cap_merged["Total (Día Seleccionado)"] = df_cap_merged[
-            "Total (Día Seleccionado)"
-        ].astype(int)
-
-        col_tabla, col_grafica = st.columns([1, 1], gap="medium")
-
-        with col_tabla:
-          st.dataframe(df_cap_merged, use_container_width=True, hide_index=True)
-
-        with col_grafica:
-          st.bar_chart(
-              df_cap_merged.set_index("Capturista / Persona")[
-                  ["Total (Día Seleccionado)", "Total (Acumulado Histórico)"]
-              ]
+        if lista_personal_oficial:
+          df_base_personal = pd.DataFrame(
+              {"Capturista / Persona": lista_personal_oficial}
           )
+
+          # Conteos de captura
+          conteo_cap_dia = (
+              df_filtrado["Capturista"].value_counts().reset_index()
+          )
+          conteo_cap_dia.columns = [
+              "Capturista / Persona",
+              "Total (Día Seleccionado)",
+          ]
+
+          conteo_cap_gen = df_rep["Capturista"].value_counts().reset_index()
+          conteo_cap_gen.columns = [
+              "Capturista / Persona",
+              "Total (Acumulado Histórico)",
+          ]
+
+          # Filtrar únicamente los nombres que pertenecen al personal oficial
+          df_cap_merged = pd.merge(
+              df_base_personal, conteo_cap_gen, on="Capturista / Persona", how="left"
+          )
+          df_cap_merged = pd.merge(
+              df_cap_merged, conteo_cap_dia, on="Capturista / Persona", how="left"
+          ).fillna(0)
+
+          df_cap_merged["Total (Acumulado Histórico)"] = df_cap_merged[
+              "Total (Acumulado Histórico)"
+          ].astype(int)
+          df_cap_merged["Total (Día Seleccionado)"] = df_cap_merged[
+              "Total (Día Seleccionado)"
+          ].astype(int)
+
+          # Ordenar descendente por total acumulado
+          df_cap_merged = df_cap_merged.sort_values(
+              by="Total (Acumulado Histórico)", ascending=False
+          )
+
+          col_tabla, col_grafica = st.columns([1, 1], gap="medium")
+
+          with col_tabla:
+            st.dataframe(
+                df_cap_merged, use_container_width=True, hide_index=True
+            )
+
+          with col_grafica:
+            st.bar_chart(
+                df_cap_merged.set_index("Capturista / Persona")[
+                    ["Total (Día Seleccionado)", "Total (Acumulado Histórico)"]
+                ]
+            )
+        else:
+          st.warning("No se encontraron nombres en la hoja PERSONAL DE CAPTURA.")
       else:
         st.info("Aún no hay registros marcados como capturados.")
     else:
