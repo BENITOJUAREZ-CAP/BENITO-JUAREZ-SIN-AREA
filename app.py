@@ -131,11 +131,15 @@ def mostrar_tarjeta_cumpleanos():
             <p style="color: #2c3e50; font-size: 18px; margin-top: 8px; font-weight: 500;">
                 ✨ Que tengas un día increíble lleno de alegrías, sonrisas y muchos éxitos. ¡Te deseamos lo mejor hoy y siempre! 🎂🎈🎉
             </p>
+            <div style="margin-top: 15px;">
+                <p style="font-size: 14px; color: #555; margin-bottom: 5px;">🎵 Reproduciendo: <b>Las Mañanitas - Cepillín</b> 🎶</p>
+                <audio controls autoplay style="width: 80%; max-width: 400px; border-radius: 20px;">
+                    <source src="https://ia801503.us.archive.org/15/items/cepillin-las-mananitas/Cepillin%20-%20Las%20Mananitas.mp3" type="audio/mp3">
+                    Tu navegador no soporta el elemento de audio.
+                </audio>
+            </div>
         </div>
     """, unsafe_allow_html=True)
-    
-    # Audio de Las Mañanitas de Cepillín
-    st.audio("https://ia801503.us.archive.org/15/items/cepillin-las-mananitas/Cepillin%20-%20Las%20Mananitas.mp3", format="audio/mp3")
 
 # BOTÓN EN LA BARRA LATERAL PARA REFRESCAR DATOS MANUALMENTE
 with st.sidebar:
