@@ -504,7 +504,6 @@ with tab_reporte:
       registros_capturados = []
       for row in datos_cruce[1:]:
         estatus = row[6].strip() if len(row) > 6 else ""
-        # Verificar registros capturados
         if "CAPTURADO" in estatus.upper() or estatus == "✓ Capturado":
           incidencia = (
               row[7].strip()
@@ -558,20 +557,17 @@ with tab_reporte:
         # 2. CONTEO DE CATÁLOGO / INCIDENCIAS (COLUMNA H)
         st.subheader("📋 Conteo del Catálogo de Incidencias (Columna H)")
 
-        # Conteo del día seleccionado
         conteo_cat_dia = (
             df_filtrado["Incidencia"].value_counts().reset_index()
         )
         conteo_cat_dia.columns = ["Incidencia / Catálogo", "Cantidad (Día)"]
 
-        # Conteo histórico total
         conteo_cat_gen = df_rep["Incidencia"].value_counts().reset_index()
         conteo_cat_gen.columns = [
             "Incidencia / Catálogo",
             "Cantidad (Total Acumulado)",
         ]
 
-        # Fusionar ambas métricas en una tabla
         df_cat_merged = pd.merge(
             conteo_cat_gen, conteo_cat_dia, on="Incidencia / Catálogo", how="left"
         ).fillna(0)
@@ -593,19 +589,42 @@ with tab_reporte:
 
         st.divider()
 
-        # 3. RENDIMIENTO POR CAPTURISTA
+        # 3. RENDIMIENTO POR CAPTURISTA (DÍA vs TOTAL ACUMULADO)
         st.subheader("👤 Rendimiento por Capturista")
 
-        conteo_cap = df_filtrado["Capturista"].value_counts().reset_index()
-        conteo_cap.columns = ["Capturista / Persona", "Total Capturados"]
+        # Conteo de lo capturado en el día seleccionado
+        conteo_cap_dia = df_filtrado["Capturista"].value_counts().reset_index()
+        conteo_cap_dia.columns = [
+            "Capturista / Persona",
+            "Total (Día Seleccionado)",
+        ]
+
+        # Conteo histórico acumulado de cada persona
+        conteo_cap_gen = df_rep["Capturista"].value_counts().reset_index()
+        conteo_cap_gen.columns = [
+            "Capturista / Persona",
+            "Total (Acumulado Histórico)",
+        ]
+
+        # Unir ambas tablas
+        df_cap_merged = pd.merge(
+            conteo_cap_gen, conteo_cap_dia, on="Capturista / Persona", how="left"
+        ).fillna(0)
+        df_cap_merged["Total (Día Seleccionado)"] = df_cap_merged[
+            "Total (Día Seleccionado)"
+        ].astype(int)
 
         col_tabla, col_grafica = st.columns([1, 1], gap="medium")
 
         with col_tabla:
-          st.dataframe(conteo_cap, use_container_width=True, hide_index=True)
+          st.dataframe(df_cap_merged, use_container_width=True, hide_index=True)
 
         with col_grafica:
-          st.bar_chart(conteo_cap.set_index("Capturista / Persona"))
+          st.bar_chart(
+              df_cap_merged.set_index("Capturista / Persona")[
+                  ["Total (Día Seleccionado)", "Total (Acumulado Histórico)"]
+              ]
+          )
       else:
         st.info("Aún no hay registros marcados como capturados.")
     else:
