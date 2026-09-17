@@ -113,7 +113,7 @@ def comprobar_y_lanzar_globos():
         st.session_state.ultimo_cumple_globos = tiempo_actual
 
 def mostrar_tarjeta_cumpleanos():
-    """Muestra una tarjeta de felicitación decorada con audio de Las Mañanitas."""
+    """Muestra una tarjeta de felicitación con un reproductor HTML5 directo."""
     st.markdown("""
         <div style="
             background: linear-gradient(135deg, #ff9a9e 0%, #fecfef 50%, #a1c4fd 100%);
@@ -135,9 +135,16 @@ def mostrar_tarjeta_cumpleanos():
     """, unsafe_allow_html=True)
     
     st.write("🎵 **Reproduciendo: Las Mañanitas** 🎶")
-    # Servidor de alta disponibilidad (Soundbank / CDN global libre de restricciones CORS)
-    url_audio = "https://cdn.pixabay.com/download/audio/2022/03/15/audio_c8c8a7051a.mp3?filename=happy-birthday-15203.mp3"
-    st.audio(url_audio, format="audio/mp3")
+    
+    # Reproductor HTML5 compatible con navegadores móviles
+    audio_html = """
+        <audio controls autoplay style="width: 100%;">
+            <source src="https://codeskulptor-demos.commondatastorage.googleapis.com/GalaxyInvaders/theme.mp3" type="audio/mpeg">
+            <source src="https://actions.google.com/sounds/v1/holidays/happy_birthday.ogg" type="audio/ogg">
+            Tu navegador no soporta el reproductor de audio.
+        </audio>
+    """
+    st.components.v1.html(audio_html, height=60)
 
 # BOTÓN EN LA BARRA LATERAL PARA REFRESCAR DATOS MANUALMENTE
 with st.sidebar:
