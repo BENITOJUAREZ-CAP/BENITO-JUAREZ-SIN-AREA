@@ -3,7 +3,6 @@ import time
 from google.oauth2.service_account import Credentials
 import gspread
 import pandas as pd
-import pytz
 import streamlit as st
 
 # CONFIGURACIÓN DE PÁGINA
@@ -204,9 +203,8 @@ with tab_captura:
 
       st.session_state.capturista_fijo = capturista_seleccionado_fuera
 
-      # CONDICIONAL CUMPLEAÑOS (Basado en la hora local de México)
-      zona_mx = pytz.timezone("America/Mexico_City")
-      es_hoy_cumple = datetime.now(zona_mx).date() == FECHA_CUMPLE
+      # CONDICIONAL CUMPLEAÑOS
+      es_hoy_cumple = datetime.now().date() == FECHA_CUMPLE
       if es_hoy_cumple and "PAOLA" in st.session_state.capturista_fijo.upper():
         comprobar_y_lanzar_globos()
         mostrar_tarjeta_cumpleanos()
@@ -228,39 +226,30 @@ with tab_captura:
 
       if datos:
         with st.form(key="form_busqueda_principal"):
-          busqueda_input = st.text_input(
-              "🔑 Escanea o ingresa la CURP o el ID:",
-              placeholder="Ej. PARL420507MDFTDR06 o 13305023",
+          busqueda_input = (
+              st.text_input(
+                  "🔑 Escanea o ingresa la CURP o el ID:",
+                  placeholder="Ej. PARL420507MDFTDR06 o 13305023",
+              )
+              .strip()
+              .upper()
           )
           btn_buscar = st.form_submit_button("🔍 Buscar")
 
         if busqueda_input:
-          # Limpiar espacios invisibles y caracteres nulos
-          busqueda_limpia = (
-              busqueda_input.strip()
-              .upper()
-              .replace(" ", "")
-              .replace("\n", "")
-              .replace("\r", "")
-          )
-          es_id = busqueda_limpia.isdigit()
+          es_id = busqueda_input.isdigit()
           col_busqueda_idx = 1 if es_id else 2
           tipo_busqueda = "ID" if es_id else "CURP"
 
           coincidencias = []
           for idx_fila, fila in enumerate(datos):
-            if len(fila) > col_busqueda_idx:
-              # Limpiar espacios de la celda de Google Sheets
-              valor_celda = (
-                  str(fila[col_busqueda_idx])
-                  .strip()
-                  .upper()
-                  .replace(" ", "")
-                  .replace("\n", "")
-                  .replace("\r", "")
+            if (
+                len(fila) > col_busqueda_idx
+                and fila[col_busqueda_idx].strip().upper() == busqueda_input
+            ):
+              coincidencias.append(
+                  {"fila_real": idx_fila + 1, "datos": fila}
               )
-              if valor_celda == busqueda_limpia:
-                coincidencias.append({"fila_real": idx_fila + 1, "datos": fila})
 
           if coincidencias:
             if len(coincidencias) > 1:
@@ -354,7 +343,7 @@ with tab_captura:
                     "📌 Opciones del Catálogo / Incidencia (Opcional):",
                     options=opciones_catalogo,
                     index=0,
-                    key=f"select_cat_{busqueda_limpia}",
+                    key=f"select_cat_{busqueda_input}",
                 )
 
                 if (
@@ -364,7 +353,7 @@ with tab_captura:
                   comprobar_y_lanzar_globos()
                   mostrar_tarjeta_cumpleanos()
 
-                with st.form(key=f"form_captura_{busqueda_limpia}"):
+                with st.form(key=f"form_captura_{busqueda_input}"):
                   idx_form_pers = 0
                   if st.session_state.capturista_fijo in opciones_personal:
                     idx_form_pers = opciones_personal.index(
@@ -399,9 +388,7 @@ with tab_captura:
                             capturista_seleccionado
                         )
 
-                        # OBTENER HORA EXACTA DE MÉXICO (UTC-6)
-                        zona_mx = pytz.timezone("America/Mexico_City")
-                        fecha_hora_actual = datetime.now(zona_mx).strftime(
+                        fecha_hora_actual = datetime.now().strftime(
                             "%Y-%m-%d %H:%M:%S"
                         )
 
@@ -605,6 +592,7 @@ with tab_reporte:
         # 3. RENDIMIENTO EXCLUSIVO DEL PERSONAL DE CAPTURA
         st.subheader("👤 Rendimiento por Personal de Captura")
 
+        # Obtener lista oficial de la hoja PERSONAL DE CAPTURA
         lista_personal_raw = obtener_opciones_personal()
         lista_personal_oficial = [
             p.upper()
@@ -617,6 +605,7 @@ with tab_reporte:
               {"Capturista / Persona": lista_personal_oficial}
           )
 
+          # Conteos de captura
           conteo_cap_dia = (
               df_filtrado["Capturista"].value_counts().reset_index()
           )
@@ -631,6 +620,7 @@ with tab_reporte:
               "Total (Acumulado Histórico)",
           ]
 
+          # Filtrar únicamente los nombres que pertenecen al personal oficial
           df_cap_merged = pd.merge(
               df_base_personal, conteo_cap_gen, on="Capturista / Persona", how="left"
           )
@@ -645,6 +635,7 @@ with tab_reporte:
               "Total (Día Seleccionado)"
           ].astype(int)
 
+          # Ordenar descendente por total acumulado
           df_cap_merged = df_cap_merged.sort_values(
               by="Total (Acumulado Histórico)", ascending=False
           )
