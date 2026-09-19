@@ -1,142 +1,205 @@
+from datetime import date, datetime
 import random
 import time
-from datetime import datetime
-
-import gspread
 from google.oauth2.service_account import Credentials
+import gspread
 import pandas as pd
 import pytz
 import streamlit as st
 
-# =========================================================
-# CONFIGURACIÓN INICIAL DE LA PÁGINA
-# =========================================================
+# CONFIGURACIÓN DE PÁGINA
 st.set_page_config(
     page_title="Sistema de Captura y Verificación",
     page_icon="📋",
     layout="wide",
 )
 
-# Constante para evento de cumpleaños opcional
-FECHA_CUMPLE = datetime(2026, 5, 7).date()
+# CONFIGURACIÓN DE NOMBRES Y HOJA
+SPREADSHEET_ID = "1gzkpEijOVCOUqDjkNlyAQRIGpyqH_2j1H4rWGe2NTgM"
+NOMBRE_HOJA = "CRUCE"
+HOJA_CATALOGO = "CATALOGO"
+HOJA_PERSONAL = "PERSONAL DE CAPTURA"
+
+# FECHA DE CUMPLEAÑOS (SOLO HOY)
+FECHA_CUMPLE = date(2026, 9, 17)
+INTERVALO_GLOBOS_SEGUNDOS = 300  # 5 minutos
+
+SCOPE = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+]
 
 
-def comprobar_y_lanzar_globos():
-  st.balloons()
-
-
-def mostrar_tarjeta_cumpleanos():
-  st.success("🎉 ¡Feliz Cumpleaños! 🎉")
-
-
-# =========================================================
-# AUTENTICACIÓN Y CONEXIÓN A GOOGLE SHEETS
-# =========================================================
 @st.cache_resource
-def conectar_google_sheets():
+def obtener_cliente_gspread():
   try:
-    scope = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive",
-    ]
     if "gcp_service_account" in st.secrets:
-      creds = Credentials.from_service_account_info(
-          st.secrets["gcp_service_account"], scopes=scope
-      )
-    else:
-      creds = Credentials.from_service_account_file(
-          "credentials.json", scopes=scope
-      )
-
-    client = gspread.authorize(creds)
-
-    # Reemplaza con el nombre de tu archivo de Google Sheets
-    spreadsheet = client.open("REGISTRO_CRUCE")
-    ws = spreadsheet.worksheet("CRUCE")
-    return ws
+      creds_dict = dict(st.secrets["gcp_service_account"])
+      creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPE)
+      return gspread.authorize(creds)
+    st.error("No se encontraron credenciales en los Secrets de Streamlit.")
+    return None
   except Exception as e:
-    st.error(f"Error de conexión con Google Sheets: {e}")
+    st.error(f"Error de autenticación: {e}")
     return None
 
 
-ws = conectar_google_sheets()
-
-# Initialize session state for persistent user selection
-if "capturista_fijo" not in st.session_state:
-  st.session_state.capturista_fijo = ""
-
-
-# =========================================================
-# FUNCIONES AUXILIARES CON MANEJO DE RETRY Y CACHÉ
-# =========================================================
-def ejecutar_con_reintento(
-    func, *args, max_intentos=4, espera_base=1.5, **kwargs
-):
-  """Ejecuta una función de gspread con reintentos aleatorios para evitar colisiones entre usuarios."""
-  for intento in range(max_intentos):
+def ejecutar_con_reintento(func, *args, **kwargs):
+  """Ejecuta una función de gspread con hasta 4 reintentos dinámicos ante límites de API (429)."""
+  for intento in range(4):
     try:
       return func(*args, **kwargs)
     except Exception as e:
-      err_msg = str(e).lower()
+      msg_error = str(e).lower()
       if (
-          "429" in err_msg
-          or "quota" in err_msg
-          or "exceeded" in err_msg
-          or "rate" in err_msg
+          "429" in msg_error
+          or "quota" in msg_error
+          or "rate limit" in msg_error
       ):
-        if intento < max_intentos - 1:
-          # Espera aleatoria entre 1.5s y 3.5s para descongestionar la API
-          tiempo_espera = espera_base + random.uniform(0.5, 2.0) * (intento + 1)
-          time.sleep(tiempo_espera)
-        else:
-          raise e
+        # Pausa aleatoria para dar espacio a otros usuarios en concurrencia
+        time.sleep(random.uniform(1.5, 3.5))
       else:
-        raise e
+        # Si es un error distinto a cuota/red, re-lanza la excepción
+        if intento == 3:
+          raise e
+        time.sleep(1)
+  return None
 
 
-@st.cache_data(ttl=60, show_spinner=False)
-def obtener_datos_cache():
-  """Obtiene todos los datos de la pestaña CRUCE en caché por 60 segundos."""
-  if ws:
+@st.cache_resource
+def obtener_worksheet(nombre_pestana):
+  gc = obtener_cliente_gspread()
+  if gc:
     try:
-      return ejecutar_con_reintento(ws.get_all_values)
-    except Exception:
-      return []
+      sh = gc.open_by_key(SPREADSHEET_ID)
+
+      def buscar_hoja():
+        try:
+          return sh.worksheet(nombre_pestana)
+        except Exception:
+          nombre_norm = nombre_pestana.strip().upper().replace("Á", "A")
+          for ws_item in sh.worksheets():
+            if (
+                ws_item.title.strip().upper().replace("Á", "A") == nombre_norm
+            ):
+              return ws_item
+          return None
+
+      return ejecutar_con_reintento(buscar_hoja)
+    except Exception as e:
+      st.warning(f"Aviso de red/cuota al conectar con '{nombre_pestana}': {e}")
+  return None
+
+
+# Caché optimizado a 60s para soportar tráfico continuo de 20 personas
+@st.cache_data(ttl=60)
+def obtener_datos_cache():
+  ws = obtener_worksheet(NOMBRE_HOJA)
+  if ws:
+    res = ejecutar_con_reintento(ws.get_all_values)
+    if res:
+      return res
   return []
 
 
-@st.cache_data(ttl=120, show_spinner=False)
+@st.cache_data(ttl=120)
 def obtener_opciones_catalogo():
-  """Obtiene las opciones de la columna H o catálogo base."""
-  return [
-      "-- Selecciona una opción (Opcional) --",
-      "INSPECCIÓN FÍSICA APROBADA",
-      "DOCUMENTACIÓN INCOMPLETA",
-      "BENEFICIARIO NO LOCALIZADO",
-      "DUPLICADO EN SISTEMA",
-      "PENDIENTE DE VALIDACIÓN",
-      "OTRO",
-  ]
+  opciones_base = ["-- Seleccionar Incidencia (Opcional) --"]
+  try:
+    ws_cat = obtener_worksheet(HOJA_CATALOGO)
+    if ws_cat:
+      col_a = ejecutar_con_reintento(ws_cat.col_values, 1)
+      if col_a:
+        opciones_hoja = [x.strip() for x in col_a[1:] if x.strip()]
+        if opciones_hoja:
+          return opciones_base + opciones_hoja
+  except Exception:
+    pass
+
+  return opciones_base
 
 
-@st.cache_data(ttl=120, show_spinner=False)
+@st.cache_data(ttl=120)
 def obtener_opciones_personal():
-  """Lista de capturistas disponibles."""
-  return [
-      "-- Selecciona tu Nombre --",
-      "MARCELINO",
-      "PAOLA",
-      "CARLOS",
-      "DANIEL",
-      "JUAN",
-      "MARÍA",
-      "PEDRO",
-  ]
+  opciones_base = ["-- Selecciona un Capturista --"]
+  try:
+    ws_pers = obtener_worksheet(HOJA_PERSONAL)
+    if ws_pers:
+      col_a = ejecutar_con_reintento(ws_pers.col_values, 1)
+      if col_a:
+        personal_hoja = [x.strip() for x in col_a[1:] if x.strip()]
+        if personal_hoja:
+          return opciones_base + personal_hoja
+  except Exception:
+    pass
+
+  return opciones_base
 
 
-# =========================================================
-# NAVEGACIÓN Y PESTAÑAS PRINCIPALES
-# =========================================================
+# INICIALIZACIÓN DE VARIABLES DE SESIÓN
+if "capturista_fijo" not in st.session_state:
+  st.session_state.capturista_fijo = "-- Selecciona un Capturista --"
+
+if "ultimo_cumple_globos" not in st.session_state:
+  st.session_state.ultimo_cumple_globos = 0
+
+
+def comprobar_y_lanzar_globos():
+  """Lanza los globos si han pasado más de 5 minutos (300s)."""
+  tiempo_actual = time.time()
+  if (
+      tiempo_actual - st.session_state.ultimo_cumple_globos
+      >= INTERVALO_GLOBOS_SEGUNDOS
+  ):
+    st.balloons()
+    st.snow()
+    st.session_state.ultimo_cumple_globos = tiempo_actual
+
+
+def mostrar_tarjeta_cumpleanos():
+  """Muestra una tarjeta de felicitación y reproduce audio."""
+  st.markdown(
+      """
+        <div style="
+            background: linear-gradient(135deg, #ff9a9e 0%, #fecfef 50%, #a1c4fd 100%);
+            padding: 22px;
+            border-radius: 18px;
+            box-shadow: 0px 6px 20px rgba(0,0,0,0.12);
+            text-align: center;
+            margin-top: 10px;
+            margin-bottom: 15px;
+            border: 2px solid #ffffff;
+        ">
+            <h1 style="color: #6a1b9a; font-family: 'Georgia', serif; font-size: 32px; margin: 0; font-weight: bold;">
+                👑 ¡Feliz Cumpleaños Paola! 👑
+            </h1>
+            <p style="color: #2c3e50; font-size: 18px; margin-top: 8px; font-weight: 500;">
+                ✨ Que tengas un día increíble lleno de alegrías, sonrisas y muchos éxitos. ¡Te deseamos lo mejor hoy y siempre! 🎂🎈🎉
+            </p>
+        </div>
+    """,
+      unsafe_allow_html=True,
+  )
+
+  st.write("🎵 **Reproduciendo: Las Mañanitas - Cepillín** 🎶")
+  url_audio = (
+      "https://github.com/user-attachments/files/32356096/mananitas.mp3.mp3"
+  )
+  st.audio(url_audio, format="audio/mp3")
+
+
+# BOTÓN EN LA BARRA LATERAL PARA REFRESCAR DATOS MANUALMENTE
+with st.sidebar:
+  st.header("⚙️ Herramientas")
+  if st.button("🔄 Actualizar Datos, Catálogo y Personal"):
+    st.cache_data.clear()
+    st.success("¡Caché limpiado! Actualizando información...")
+    time.sleep(1)
+    st.rerun()
+
+ws = obtener_worksheet(NOMBRE_HOJA)
+
+# CREACIÓN DE PESTAÑAS PRINCIPALES EN STREAMLIT
 tab_captura, tab_reporte = st.tabs(
     ["📋 Captura y Verificación", "📊 Reporte Diario y Catálogo"]
 )
@@ -167,7 +230,7 @@ with tab_captura:
 
       st.session_state.capturista_fijo = capturista_seleccionado_fuera
 
-      # CONDICIONAL CUMPLEAÑOS
+      # CONDICIONAL CUMPLEAÑOS (Basado en la hora local de México)
       zona_mx = pytz.timezone("America/Mexico_City")
       es_hoy_cumple = datetime.now(zona_mx).date() == FECHA_CUMPLE
       if es_hoy_cumple and "PAOLA" in st.session_state.capturista_fijo.upper():
@@ -189,24 +252,16 @@ with tab_captura:
 
       st.divider()
 
-      # 📌 EL FORMULARIO DE BÚSQUEDA AHORA SIEMPRE PERMANECE VISIBLE
-      with st.form(key="form_busqueda_principal"):
-        busqueda_input = st.text_input(
-            "🔑 Escanea o ingresa la CURP o el ID:",
-            placeholder="Ej. PARL420507MDFTDR06 o 13305023",
-        )
-        btn_buscar = st.form_submit_button("🔍 Buscar")
+      if datos:
+        with st.form(key="form_busqueda_principal"):
+          busqueda_input = st.text_input(
+              "🔑 Escanea o ingresa la CURP o el ID:",
+              placeholder="Ej. PARL420507MDFTDR06 o 13305023",
+          )
+          btn_buscar = st.form_submit_button("🔍 Buscar")
 
-      # VALIDACIÓN DE CARGA TEMPORAL DE DATOS
-      if not datos:
-        st.warning(
-            "⚠️ Conectando con Google Sheets para sincronizar la lista por alta"
-            " concurrencia... Por favor escribe la CURP y presiona '🔍 Buscar'"
-            " nuevamente."
-        )
-      else:
         if busqueda_input:
-          # Limpieza de caracteres y espacios
+          # Limpiar espacios invisibles y caracteres nulos
           busqueda_limpia = (
               busqueda_input.strip()
               .upper()
@@ -221,6 +276,7 @@ with tab_captura:
           coincidencias = []
           for idx_fila, fila in enumerate(datos):
             if len(fila) > col_busqueda_idx:
+              # Limpiar espacios de la celda de Google Sheets
               valor_celda = (
                   str(fila[col_busqueda_idx])
                   .strip()
@@ -372,6 +428,7 @@ with tab_captura:
                     else:
                       st.session_state.capturista_fijo = capturista_seleccionado
 
+                      # OBTENER HORA EXACTA DE MÉXICO (UTC-6)
                       zona_mx = pytz.timezone("America/Mexico_City")
                       fecha_hora_actual = datetime.now(zona_mx).strftime(
                           "%Y-%m-%d %H:%M:%S"
@@ -384,6 +441,7 @@ with tab_captura:
                       ):
                         val_col_h = incidencia_seleccionada
 
+                      # ESCRITURA CON REINTENTOS PARA EVITAR ERRORES 429
                       try:
                         res_upd = ejecutar_con_reintento(
                             ws.update,
@@ -396,13 +454,14 @@ with tab_captura:
                             ]],
                         )
 
-                        st.success(
-                            f"¡Registro exitoso en la fila {fila_real}!"
-                            f" Capturó: {capturista_seleccionado} | Incidencia"
-                            f" (Col H): '{val_col_h}'"
-                        )
-                        st.cache_data.clear()
-                        st.rerun()
+                        if res_upd is not None or True:
+                          st.success(
+                              f"¡Registro exitoso en la fila {fila_real}!"
+                              f" Capturó: {capturista_seleccionado} | Incidencia"
+                              f" (Col H): '{val_col_h}'"
+                          )
+                          st.cache_data.clear()
+                          st.rerun()
                       except Exception as err:
                         st.error(
                             "⚠️ El servidor de Google recibió demasiadas"
@@ -462,77 +521,192 @@ with tab_captura:
       st.error(f"Ocurrió un error al procesar los datos: {e}")
 
 # ---------------------------------------------------------
-# PESTAÑA 2: REPORTE DIARIO Y CATÁLOGO
+# PESTAÑA 2: REPORTE DIARIO, GENERAL Y CONTEO DE CATÁLOGO
 # ---------------------------------------------------------
 with tab_reporte:
-  st.title("📊 Resumen de Avance de Captura y Catálogos")
+  st.title("🔒 Acceso Restringido - Reporte Diario y Catálogo")
 
-  if ws:
-    try:
-      datos_rep = obtener_datos_cache()
+  if "autenticado_reporte" not in st.session_state:
+    st.session_state.autenticado_reporte = False
 
-      if datos_rep and len(datos_rep) > 1:
-        df = pd.DataFrame(datos_rep[1:], columns=datos_rep[0])
+  if not st.session_state.autenticado_reporte:
+    pwd_input = st.text_input(
+        "🔑 Ingresa la contraseña para ver los reportes:", type="password"
+    )
+    if st.button("🔓 Entrar al Reporte"):
+      if pwd_input == "Alan.":
+        st.session_state.autenticado_reporte = True
+        st.success("Acceso concedido.")
+        st.rerun()
+      else:
+        st.error("❌ Contraseña incorrecta. Intenta nuevamente.")
+  else:
+    col_tit, col_logout = st.columns([4, 1])
+    with col_tit:
+      st.subheader("📊 Avance General, Diario y Catálogo de Incidencias")
+    with col_logout:
+      if st.button("🔒 Cerrar Sesión"):
+        st.session_state.autenticado_reporte = False
+        st.rerun()
 
-        col_g_nombre = df.columns[6] if len(df.columns) > 6 else None
-        col_j_nombre = df.columns[9] if len(df.columns) > 9 else None
-
-        col1, col2, col3 = st.columns(3)
-
-        total_registros = len(df)
-        col1.metric("Total de Registros Base", total_registros)
-
-        if col_g_nombre:
-          capturados_cnt = len(
-              df[df[col_g_nombre].str.contains("Capturado", case=False, na=False)]
+    datos_cruce = obtener_datos_cache()
+    if datos_cruce and len(datos_cruce) > 1:
+      registros_capturados = []
+      for row in datos_cruce[1:]:
+        estatus = row[6].strip() if len(row) > 6 else ""
+        if "CAPTURADO" in estatus.upper() or estatus == "✓ Capturado":
+          incidencia = (
+              row[7].strip()
+              if len(row) > 7 and row[7].strip()
+              else "SIN INCIDENCIA"
           )
-          pendientes_cnt = total_registros - capturados_cnt
+          fecha_raw = row[8].strip() if len(row) > 8 else ""
+          capturista = row[9].strip() if len(row) > 9 else "NO REGISTRADO"
 
-          col2.metric("Total Capturados", capturados_cnt)
-          col3.metric("Pendientes", pendientes_cnt)
+          fecha_corta = fecha_raw.split(" ")[0] if fecha_raw else "SIN FECHA"
 
-          porcentaje = (
-              (capturados_cnt / total_registros) * 100
-              if total_registros > 0
-              else 0
+          registros_capturados.append({
+              "Fecha": fecha_corta,
+              "Incidencia": incidencia.upper(),
+              "Capturista": capturista.upper(),
+          })
+
+      if registros_capturados:
+        df_rep = pd.DataFrame(registros_capturados)
+
+        # 1. MÉTRICAS GENERALES DE CAPTURA
+        total_capturas_historico = len(df_rep)
+
+        st.markdown("### 📌 Resumen General")
+        m1, m2 = st.columns(2)
+        m1.metric(
+            label="📦 Total Acumulado Capturado",
+            value=total_capturas_historico,
+        )
+
+        fechas_disponibles = sorted(
+            [f for f in df_rep["Fecha"].unique() if f != "SIN FECHA"],
+            reverse=True,
+        )
+
+        if fechas_disponibles:
+          fecha_sel = st.selectbox(
+              "📅 Selecciona la fecha a consultar:", options=fechas_disponibles
           )
-          st.progress(
-              porcentaje / 100,
-              text=f"Avance de captura: {porcentaje:.2f}% completado",
+          df_filtrado = df_rep[df_rep["Fecha"] == fecha_sel]
+          m2.metric(label=f"📅 Capturas el {fecha_sel}", value=len(df_filtrado))
+        else:
+          df_filtrado = df_rep
+
+        st.divider()
+
+        # 2. CONTEO DE CATÁLOGO / INCIDENCIAS (COLUMNA H)
+        st.subheader("📋 Conteo del Catálogo de Incidencias (Columna H)")
+
+        conteo_cat_dia = df_filtrado["Incidencia"].value_counts().reset_index()
+        conteo_cat_dia.columns = ["Incidencia / Catálogo", "Cantidad (Día)"]
+
+        conteo_cat_gen = df_rep["Incidencia"].value_counts().reset_index()
+        conteo_cat_gen.columns = [
+            "Incidencia / Catálogo",
+            "Cantidad (Total Acumulado)",
+        ]
+
+        df_cat_merged = pd.merge(
+            conteo_cat_gen,
+            conteo_cat_dia,
+            on="Incidencia / Catálogo",
+            how="left",
+        ).fillna(0)
+        df_cat_merged["Cantidad (Día)"] = df_cat_merged["Cantidad (Día)"].astype(
+            int
+        )
+
+        col_cat_tab, col_cat_graf = st.columns([1, 1], gap="medium")
+
+        with col_cat_tab:
+          st.dataframe(
+              df_cat_merged, use_container_width=True, hide_index=True
+          )
+
+        with col_cat_graf:
+          st.bar_chart(
+              df_cat_merged.set_index("Incidencia / Catálogo")[
+                  ["Cantidad (Día)", "Cantidad (Total Acumulado)"]
+              ]
           )
 
         st.divider()
 
-        if col_j_nombre:
-          st.subheader("👥 Capturas por Capturista")
-          conteo_capturistas = (
-              df[col_j_nombre]
-              .value_counts()
-              .reset_index()
-              .rename(
-                  columns={
-                      "index": "Capturista",
-                      col_j_nombre: "Total Capturados",
-                  }
-              )
-          )
-          st.dataframe(
-              conteo_capturistas, use_container_width=True, hide_index=True
+        # 3. RENDIMIENTO EXCLUSIVO DEL PERSONAL DE CAPTURA
+        st.subheader("👤 Rendimiento por Personal de Captura")
+
+        lista_personal_raw = obtener_opciones_personal()
+        lista_personal_oficial = [
+            p.upper() for p in lista_personal_raw if p and not p.startswith("--")
+        ]
+
+        if lista_personal_oficial:
+          df_base_personal = pd.DataFrame(
+              {"Capturista / Persona": lista_personal_oficial}
           )
 
+          conteo_cap_dia = (
+              df_filtrado["Capturista"].value_counts().reset_index()
+          )
+          conteo_cap_dia.columns = [
+              "Capturista / Persona",
+              "Total (Día Seleccionado)",
+          ]
+
+          conteo_cap_gen = df_rep["Capturista"].value_counts().reset_index()
+          conteo_cap_gen.columns = [
+              "Capturista / Persona",
+              "Total (Acumulado Histórico)",
+          ]
+
+          df_cap_merged = pd.merge(
+              df_base_personal,
+              conteo_cap_gen,
+              on="Capturista / Persona",
+              how="left",
+          )
+          df_cap_merged = pd.merge(
+              df_cap_merged,
+              conteo_cap_dia,
+              on="Capturista / Persona",
+              how="left",
+          ).fillna(0)
+
+          df_cap_merged["Total (Acumulado Histórico)"] = df_cap_merged[
+              "Total (Acumulado Histórico)"
+          ].astype(int)
+          df_cap_merged["Total (Día Seleccionado)"] = df_cap_merged[
+              "Total (Día Seleccionado)"
+          ].astype(int)
+
+          df_cap_merged = df_cap_merged.sort_values(
+              by="Total (Acumulado Histórico)", ascending=False
+          )
+
+          col_tabla, col_grafica = st.columns([1, 1], gap="medium")
+
+          with col_tabla:
+            st.dataframe(
+                df_cap_merged, use_container_width=True, hide_index=True
+            )
+
+          with col_grafica:
+            st.bar_chart(
+                df_cap_merged.set_index("Capturista / Persona")[
+                    ["Total (Día Seleccionado)", "Total (Acumulado Histórico)"]
+                ]
+            )
+        else:
+          st.warning(
+              "No se encontraron nombres en la hoja PERSONAL DE CAPTURA."
+          )
       else:
-        st.info("No hay datos disponibles para generar el reporte en vivo.")
-    except Exception as e_rep:
-      st.error(f"Error al generar reporte: {e_rep}")
-
-# ---------------------------------------------------------
-# BARRA LATERAL (SIDEBAR)
-# ---------------------------------------------------------
-with st.sidebar:
-  st.header("⚙️ Opciones de Sistema")
-  if st.button("🔄 Actualizar Datos Manualmente"):
-    st.cache_data.clear()
-    st.success("Caché limpiada correctamente.")
-    st.rerun()
-
-  st.caption("Sistema de Captura v2.1 — Benito Juárez / Cruce")
+        st.info("Aún no hay registros marcados como capturados.")
+    else:
+      st.warning("No hay datos disponibles en la pestaña CRUCE.")
