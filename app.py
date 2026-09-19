@@ -3,6 +3,7 @@ import time
 from google.oauth2.service_account import Credentials
 import gspread
 import pandas as pd
+import pytz
 import streamlit as st
 
 # CONFIGURACIÓN DE PÁGINA
@@ -203,8 +204,9 @@ with tab_captura:
 
       st.session_state.capturista_fijo = capturista_seleccionado_fuera
 
-      # CONDICIONAL CUMPLEAÑOS
-      es_hoy_cumple = datetime.now().date() == FECHA_CUMPLE
+      # CONDICIONAL CUMPLEAÑOS (Basado en la hora local de México)
+      zona_mx = pytz.timezone("America/Mexico_City")
+      es_hoy_cumple = datetime.now(zona_mx).date() == FECHA_CUMPLE
       if es_hoy_cumple and "PAOLA" in st.session_state.capturista_fijo.upper():
         comprobar_y_lanzar_globos()
         mostrar_tarjeta_cumpleanos()
@@ -388,7 +390,9 @@ with tab_captura:
                             capturista_seleccionado
                         )
 
-                        fecha_hora_actual = datetime.now().strftime(
+                        # OBTENER HORA EXACTA DE MÉXICO
+                        zona_mx = pytz.timezone("America/Mexico_City")
+                        fecha_hora_actual = datetime.now(zona_mx).strftime(
                             "%Y-%m-%d %H:%M:%S"
                         )
 
