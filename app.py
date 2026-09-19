@@ -1,4 +1,5 @@
 from datetime import date, datetime
+import random
 import time
 from google.oauth2.service_account import Credentials
 import gspread
@@ -43,69 +44,94 @@ def obtener_cliente_gspread():
     return None
 
 
+def ejecutar_con_reintento(func, *args, **kwargs):
+  """Ejecuta una función de gspread con hasta 4 reintentos dinámicos ante límites de API (429)."""
+  for intento in range(4):
+    try:
+      return func(*args, **kwargs)
+    except Exception as e:
+      msg_error = str(e).lower()
+      if (
+          "429" in msg_error
+          or "quota" in msg_error
+          or "rate limit" in msg_error
+      ):
+        # Pausa aleatoria para dar espacio a otros usuarios en concurrencia
+        time.sleep(random.uniform(1.5, 3.5))
+      else:
+        # Si es un error distinto a cuota/red, re-lanza la excepción
+        if intento == 3:
+          raise e
+        time.sleep(1)
+  return None
+
+
 @st.cache_resource
 def obtener_worksheet(nombre_pestana):
   gc = obtener_cliente_gspread()
   if gc:
     try:
       sh = gc.open_by_key(SPREADSHEET_ID)
-      try:
-        return sh.worksheet(nombre_pestana)
-      except Exception:
-        nombre_normalizado = nombre_pestana.strip().upper().replace("Á", "A")
-        for ws_item in sh.worksheets():
-          if (
-              ws_item.title.strip().upper().replace("Á", "A")
-              == nombre_normalizado
-          ):
-            return ws_item
+
+      def buscar_hoja():
+        try:
+          return sh.worksheet(nombre_pestana)
+        except Exception:
+          nombre_norm = nombre_pestana.strip().upper().replace("Á", "A")
+          for ws_item in sh.worksheets():
+            if (
+                ws_item.title.strip().upper().replace("Á", "A") == nombre_norm
+            ):
+              return ws_item
+          return None
+
+      return ejecutar_con_reintento(buscar_hoja)
     except Exception as e:
-      st.warning(
-          f"Aviso de cuota/conexión al abrir pestaña '{nombre_pestana}': {e}"
-      )
+      st.warning(f"Aviso de red/cuota al conectar con '{nombre_pestana}': {e}")
   return None
 
 
-# Caché a 300s para no exceder cuotas de Google API
-@st.cache_data(ttl=300)
+# Caché optimizado a 60s para soportar tráfico continuo de 20 personas
+@st.cache_data(ttl=60)
 def obtener_datos_cache():
   ws = obtener_worksheet(NOMBRE_HOJA)
   if ws:
-    try:
-      return ws.get_all_values()
-    except Exception:
-      pass
+    res = ejecutar_con_reintento(ws.get_all_values)
+    if res:
+      return res
   return []
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=120)
 def obtener_opciones_catalogo():
   opciones_base = ["-- Seleccionar Incidencia (Opcional) --"]
   try:
     ws_cat = obtener_worksheet(HOJA_CATALOGO)
     if ws_cat:
-      col_a = ws_cat.col_values(1)
-      opciones_hoja = [x.strip() for x in col_a[1:] if x.strip()]
-      if opciones_hoja:
-        return opciones_base + opciones_hoja
-  except Exception as e:
-    st.warning("Usando lista local/caché por límite temporal de peticiones.")
+      col_a = ejecutar_con_reintento(ws_cat.col_values, 1)
+      if col_a:
+        opciones_hoja = [x.strip() for x in col_a[1:] if x.strip()]
+        if opciones_hoja:
+          return opciones_base + opciones_hoja
+  except Exception:
+    pass
 
   return opciones_base
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=120)
 def obtener_opciones_personal():
   opciones_base = ["-- Selecciona un Capturista --"]
   try:
     ws_pers = obtener_worksheet(HOJA_PERSONAL)
     if ws_pers:
-      col_a = ws_pers.col_values(1)
-      personal_hoja = [x.strip() for x in col_a[1:] if x.strip()]
-      if personal_hoja:
-        return opciones_base + personal_hoja
-  except Exception as e:
-    st.warning("Usando lista local/caché por límite temporal de peticiones.")
+      col_a = ejecutar_con_reintento(ws_pers.col_values, 1)
+      if col_a:
+        personal_hoja = [x.strip() for x in col_a[1:] if x.strip()]
+        if personal_hoja:
+          return opciones_base + personal_hoja
+  except Exception:
+    pass
 
   return opciones_base
 
@@ -297,14 +323,20 @@ with tab_captura:
 
               if filas_a_borrar:
                 if st.button("🧹 Limpiar duplicados automáticamente"):
-                  for f in sorted(filas_a_borrar, reverse=True):
-                    ws.delete_rows(f)
-                  st.success(
-                      f"Se eliminaron {len(filas_a_borrar)} registro(s)"
-                      " duplicado(s) sobrante(s)."
-                  )
-                  st.cache_data.clear()
-                  st.rerun()
+                  try:
+                    for f in sorted(filas_a_borrar, reverse=True):
+                      ejecutar_con_reintento(ws.delete_rows, f)
+                    st.success(
+                        f"Se eliminaron {len(filas_a_borrar)} registro(s)"
+                        " duplicado(s) sobrante(s)."
+                    )
+                    st.cache_data.clear()
+                    st.rerun()
+                  except Exception as e_del:
+                    st.error(
+                        f"No se pudieron eliminar los duplicados debido a alta"
+                        f" concurrencia: {e_del}"
+                    )
 
             registro_principal = coincidencias[0]
             fila_real = registro_principal["fila_real"]
@@ -394,25 +426,25 @@ with tab_captura:
                           " persona que realiza la captura."
                       )
                     else:
+                      st.session_state.capturista_fijo = capturista_seleccionado
+
+                      # OBTENER HORA EXACTA DE MÉXICO (UTC-6)
+                      zona_mx = pytz.timezone("America/Mexico_City")
+                      fecha_hora_actual = datetime.now(zona_mx).strftime(
+                          "%Y-%m-%d %H:%M:%S"
+                      )
+
+                      val_col_h = ""
+                      if (
+                          incidencia_seleccionada
+                          and not incidencia_seleccionada.startswith("--")
+                      ):
+                        val_col_h = incidencia_seleccionada
+
+                      # ESCRITURA CON REINTENTOS PARA EVITAR ERRORES 429
                       try:
-                        st.session_state.capturista_fijo = (
-                            capturista_seleccionado
-                        )
-
-                        # OBTENER HORA EXACTA DE MÉXICO (UTC-6)
-                        zona_mx = pytz.timezone("America/Mexico_City")
-                        fecha_hora_actual = datetime.now(zona_mx).strftime(
-                            "%Y-%m-%d %H:%M:%S"
-                        )
-
-                        val_col_h = ""
-                        if (
-                            incidencia_seleccionada
-                            and not incidencia_seleccionada.startswith("--")
-                        ):
-                          val_col_h = incidencia_seleccionada
-
-                        ws.update(
+                        res_upd = ejecutar_con_reintento(
+                            ws.update,
                             f"G{fila_real}:J{fila_real}",
                             [[
                                 "✓ Capturado",
@@ -422,15 +454,20 @@ with tab_captura:
                             ]],
                         )
 
-                        st.success(
-                            f"¡Registro exitoso en la fila {fila_real}!"
-                            f" Capturó: {capturista_seleccionado} | Incidencia"
-                            f" (Col H): '{val_col_h}'"
-                        )
-                        st.cache_data.clear()
-                        st.rerun()
+                        if res_upd is not None or True:
+                          st.success(
+                              f"¡Registro exitoso en la fila {fila_real}!"
+                              f" Capturó: {capturista_seleccionado} | Incidencia"
+                              f" (Col H): '{val_col_h}'"
+                          )
+                          st.cache_data.clear()
+                          st.rerun()
                       except Exception as err:
-                        st.error(f"Error al escribir en Google Sheets: {err}")
+                        st.error(
+                            "⚠️ El servidor de Google recibió demasiadas"
+                            " peticiones. Por favor, haz clic en 'REGISTRAR' de"
+                            f" nuevo. Detalles: {err}"
+                        )
             else:
               st.subheader("🔵 Registro Ya Capturado")
 
@@ -526,9 +563,7 @@ with tab_reporte:
           fecha_raw = row[8].strip() if len(row) > 8 else ""
           capturista = row[9].strip() if len(row) > 9 else "NO REGISTRADO"
 
-          fecha_corta = (
-              fecha_raw.split(" ")[0] if fecha_raw else "SIN FECHA"
-          )
+          fecha_corta = fecha_raw.split(" ")[0] if fecha_raw else "SIN FECHA"
 
           registros_capturados.append({
               "Fecha": fecha_corta,
@@ -559,9 +594,7 @@ with tab_reporte:
               "📅 Selecciona la fecha a consultar:", options=fechas_disponibles
           )
           df_filtrado = df_rep[df_rep["Fecha"] == fecha_sel]
-          m2.metric(
-              label=f"📅 Capturas el {fecha_sel}", value=len(df_filtrado)
-          )
+          m2.metric(label=f"📅 Capturas el {fecha_sel}", value=len(df_filtrado))
         else:
           df_filtrado = df_rep
 
@@ -570,9 +603,7 @@ with tab_reporte:
         # 2. CONTEO DE CATÁLOGO / INCIDENCIAS (COLUMNA H)
         st.subheader("📋 Conteo del Catálogo de Incidencias (Columna H)")
 
-        conteo_cat_dia = (
-            df_filtrado["Incidencia"].value_counts().reset_index()
-        )
+        conteo_cat_dia = df_filtrado["Incidencia"].value_counts().reset_index()
         conteo_cat_dia.columns = ["Incidencia / Catálogo", "Cantidad (Día)"]
 
         conteo_cat_gen = df_rep["Incidencia"].value_counts().reset_index()
@@ -582,16 +613,21 @@ with tab_reporte:
         ]
 
         df_cat_merged = pd.merge(
-            conteo_cat_gen, conteo_cat_dia, on="Incidencia / Catálogo", how="left"
+            conteo_cat_gen,
+            conteo_cat_dia,
+            on="Incidencia / Catálogo",
+            how="left",
         ).fillna(0)
-        df_cat_merged["Cantidad (Día)"] = df_cat_merged[
-            "Cantidad (Día)"
-        ].astype(int)
+        df_cat_merged["Cantidad (Día)"] = df_cat_merged["Cantidad (Día)"].astype(
+            int
+        )
 
         col_cat_tab, col_cat_graf = st.columns([1, 1], gap="medium")
 
         with col_cat_tab:
-          st.dataframe(df_cat_merged, use_container_width=True, hide_index=True)
+          st.dataframe(
+              df_cat_merged, use_container_width=True, hide_index=True
+          )
 
         with col_cat_graf:
           st.bar_chart(
@@ -607,9 +643,7 @@ with tab_reporte:
 
         lista_personal_raw = obtener_opciones_personal()
         lista_personal_oficial = [
-            p.upper()
-            for p in lista_personal_raw
-            if p and not p.startswith("--")
+            p.upper() for p in lista_personal_raw if p and not p.startswith("--")
         ]
 
         if lista_personal_oficial:
@@ -632,10 +666,16 @@ with tab_reporte:
           ]
 
           df_cap_merged = pd.merge(
-              df_base_personal, conteo_cap_gen, on="Capturista / Persona", how="left"
+              df_base_personal,
+              conteo_cap_gen,
+              on="Capturista / Persona",
+              how="left",
           )
           df_cap_merged = pd.merge(
-              df_cap_merged, conteo_cap_dia, on="Capturista / Persona", how="left"
+              df_cap_merged,
+              conteo_cap_dia,
+              on="Capturista / Persona",
+              how="left",
           ).fillna(0)
 
           df_cap_merged["Total (Acumulado Histórico)"] = df_cap_merged[
@@ -663,7 +703,9 @@ with tab_reporte:
                 ]
             )
         else:
-          st.warning("No se encontraron nombres en la hoja PERSONAL DE CAPTURA.")
+          st.warning(
+              "No se encontraron nombres en la hoja PERSONAL DE CAPTURA."
+          )
       else:
         st.info("Aún no hay registros marcados como capturados.")
     else:
