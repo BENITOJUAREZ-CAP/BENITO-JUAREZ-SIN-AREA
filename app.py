@@ -7,20 +7,21 @@ import pandas as pd
 import pytz
 import streamlit as st
 
-# CONFIGURACIÓN DE PÁGINA
+# ==========================================
+# 1. CONFIGURACIÓN DE PÁGINA Y CONSTANTES
+# ==========================================
 st.set_page_config(
-    page_title="Sistema de Captura y Verificación",
+    page_title="Sistema de Captura, Verificación y Cruce",
     page_icon="📋",
     layout="wide",
 )
 
-# CONFIGURACIÓN DE NOMBRES Y HOJA
 SPREADSHEET_ID = "1gzkpEijOVCOUqDjkNlyAQRIGpyqH_2j1H4rWGe2NTgM"
 NOMBRE_HOJA = "CRUCE"
+HOJA_SIFUB = "BASE SIFUB"
 HOJA_CATALOGO = "CATALOGO"
 HOJA_PERSONAL = "PERSONAL DE CAPTURA"
 
-# FECHA DE CUMPLEAÑOS (SOLO HOY)
 FECHA_CUMPLE = date(2026, 9, 17)
 INTERVALO_GLOBOS_SEGUNDOS = 300  # 5 minutos
 
@@ -30,6 +31,9 @@ SCOPE = [
 ]
 
 
+# ==========================================
+# 2. AUTENTICACIÓN Y CONEXIÓN
+# ==========================================
 @st.cache_resource
 def obtener_cliente_gspread():
   try:
@@ -45,7 +49,7 @@ def obtener_cliente_gspread():
 
 
 def ejecutar_con_reintento(func, *args, **kwargs):
-  """Ejecuta una función de gspread con hasta 4 reintentos dinámicos ante límites de API (429)."""
+  """Ejecuta una función de gspread con hasta 4 reintentos ante límites de API (429)."""
   for intento in range(4):
     try:
       return func(*args, **kwargs)
@@ -56,10 +60,8 @@ def ejecutar_con_reintento(func, *args, **kwargs):
           or "quota" in msg_error
           or "rate limit" in msg_error
       ):
-        # Pausa aleatoria para dar espacio a otros usuarios en concurrencia
         time.sleep(random.uniform(1.5, 3.5))
       else:
-        # Si es un error distinto a cuota/red, re-lanza la excepción
         if intento == 3:
           raise e
         time.sleep(1)
@@ -91,7 +93,6 @@ def obtener_worksheet(nombre_pestana):
   return None
 
 
-# Caché optimizado a 60s para soportar tráfico continuo de 20 personas
 @st.cache_data(ttl=60)
 def obtener_datos_cache():
   ws = obtener_worksheet(NOMBRE_HOJA)
@@ -115,7 +116,6 @@ def obtener_opciones_catalogo():
           return opciones_base + opciones_hoja
   except Exception:
     pass
-
   return opciones_base
 
 
@@ -132,11 +132,138 @@ def obtener_opciones_personal():
           return opciones_base + personal_hoja
   except Exception:
     pass
-
   return opciones_base
 
 
-# INICIALIZACIÓN DE VARIABLES DE SESIÓN
+# ==========================================
+# 3. LÓGICA DEL CRUCE Y MARCADO EN ROJO
+# ==========================================
+def realizar_cruce_y_marcar_rojo():
+  """Compara BASE SIFUB contra CRUCE y marca en rojo en Google Sheets los registros que NO están en CRUCE."""
+  gc = obtener_cliente_gspread()
+  if not gc:
+    st.error("No se pudo conectar con Google Sheets.")
+    return
+
+  try:
+    sh = gc.open_by_key(SPREADSHEET_ID)
+    ws_cruce = obtener_worksheet(NOMBRE_HOJA)
+    ws_sifub = obtener_worksheet(HOJA_SIFUB)
+
+    if not ws_cruce or not ws_sifub:
+      st.error("No se encontraron las pestañas CRUCE o BASE SIFUB.")
+      return
+
+    datos_cruce = ejecutar_con_reintento(ws_cruce.get_all_values)
+    datos_sifub = ejecutar_con_reintento(ws_sifub.get_all_values)
+
+    if not datos_cruce or not datos_sifub:
+      st.error("Una de las hojas está vacía.")
+      return
+
+    # Crear conjunto de CURP/ID existentes en la hoja CRUCE (limpios)
+    # Revisa columna 2 (CURP) y 1 (ID)
+    keys_cruce = set()
+    for row in datos_cruce[1:]:
+      if len(row) > 2 and row[2].strip():
+        keys_cruce.add(
+            str(row[2]).strip().upper().replace(" ", "").replace("\n", "")
+        )
+      if len(row) > 1 and row[1].strip():
+        keys_cruce.add(
+            str(row[1]).strip().upper().replace(" ", "").replace("\n", "")
+        )
+
+    requests = []
+    total_no_encontrados = 0
+
+    # Determinar el número de columnas de BASE SIFUB para pintar la fila completa
+    num_columnas = len(datos_sifub[0]) if datos_sifub else 10
+
+    # Iterar sobre las filas de BASE SIFUB
+    for idx_fila, row in enumerate(datos_sifub[1:], start=2):
+      curp_sifub = (
+          str(row[2]).strip().upper().replace(" ", "").replace("\n", "")
+          if len(row) > 2
+          else ""
+      )
+      id_sifub = (
+          str(row[1]).strip().upper().replace(" ", "").replace("\n", "")
+          if len(row) > 1
+          else ""
+      )
+
+      # Evaluar si la CURP o el ID están en la hoja CRUCE
+      encontrado = (curp_sifub and curp_sifub in keys_cruce) or (
+          id_sifub and id_sifub in keys_cruce
+      )
+
+      if not encontrado and (curp_sifub or id_sifub):
+        total_no_encontrados += 1
+        # Solicitud de formato: Fondo Rojo Claro para las celdas de esa fila
+        requests.append({
+            "repeatCell": {
+                "range": {
+                    "sheetId": ws_sifub.id,
+                    "startRowIndex": idx_fila - 1,
+                    "endRowIndex": idx_fila,
+                    "startColumnIndex": 0,
+                    "endColumnIndex": num_columnas,
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "backgroundColor": {
+                            "red": 0.98,
+                            "green": 0.78,
+                            "blue": 0.78,
+                        }  # Rojo claro
+                    }
+                },
+                "fields": "userEnteredFormat.backgroundColor",
+            }
+        })
+      else:
+        # Restaurar a fondo Blanco si sí fue encontrado
+        requests.append({
+            "repeatCell": {
+                "range": {
+                    "sheetId": ws_sifub.id,
+                    "startRowIndex": idx_fila - 1,
+                    "endRowIndex": idx_fila,
+                    "startColumnIndex": 0,
+                    "endColumnIndex": num_columnas,
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "backgroundColor": {
+                            "red": 1.0,
+                            "green": 1.0,
+                            "blue": 1.0,
+                        }  # Blanco
+                    }
+                },
+                "fields": "userEnteredFormat.backgroundColor",
+            }
+        })
+
+    # Aplicar cambios en lote a Google Sheets
+    if requests:
+      sh.batch_update({"requests": requests})
+      st.success(
+          f"¡Cruce finalizado con éxito! Se identificaron **{total_no_encontrados}**"
+          " registros de BASE SIFUB que NO están en CRUCE y fueron marcados en"
+          " color rojo en Google Sheets."
+      )
+    else:
+      st.info("Todos los registros de BASE SIFUB fueron encontrados en CRUCE.")
+
+  except Exception as e:
+    st.error(f"Error al realizar el cruce: {e}")
+
+
+# ==========================================
+# 4. INICIALIZACIÓN DE VARIABLES DE SESIÓN Y CUMPLEAÑOS
+# ==========================================
 if "capturista_fijo" not in st.session_state:
   st.session_state.capturista_fijo = "-- Selecciona un Capturista --"
 
@@ -145,7 +272,6 @@ if "ultimo_cumple_globos" not in st.session_state:
 
 
 def comprobar_y_lanzar_globos():
-  """Lanza los globos si han pasado más de 5 minutos (300s)."""
   tiempo_actual = time.time()
   if (
       tiempo_actual - st.session_state.ultimo_cumple_globos
@@ -157,7 +283,6 @@ def comprobar_y_lanzar_globos():
 
 
 def mostrar_tarjeta_cumpleanos():
-  """Muestra una tarjeta de felicitación y reproduce audio."""
   st.markdown(
       """
         <div style="
@@ -180,29 +305,31 @@ def mostrar_tarjeta_cumpleanos():
     """,
       unsafe_allow_html=True,
   )
-
-  st.write("🎵 **Reproduciendo: Las Mañanitas - Cepillín** 🎶")
-  url_audio = (
-      "https://github.com/user-attachments/files/32356096/mananitas.mp3.mp3"
+  st.audio(
+      "https://github.com/user-attachments/files/32356096/mananitas.mp3.mp3",
+      format="audio/mp3",
   )
-  st.audio(url_audio, format="audio/mp3")
 
 
-# BOTÓN EN LA BARRA LATERAL PARA REFRESCAR DATOS MANUALMENTE
+# ==========================================
+# 5. BARRA LATERAL Y NAVEGACIÓN
+# ==========================================
 with st.sidebar:
   st.header("⚙️ Herramientas")
-  if st.button("🔄 Actualizar Datos, Catálogo y Personal"):
+  if st.button("🔄 Actualizar Datos, Catálogo y Personal", use_container_width=True):
     st.cache_data.clear()
-    st.success("¡Caché limpiado! Actualizando información...")
+    st.success("¡Caché limpiado! Actualizando...")
     time.sleep(1)
     st.rerun()
 
 ws = obtener_worksheet(NOMBRE_HOJA)
 
-# CREACIÓN DE PESTAÑAS PRINCIPALES EN STREAMLIT
-tab_captura, tab_reporte = st.tabs(
-    ["📋 Captura y Verificación", "📊 Reporte Diario y Catálogo"]
-)
+# CREACIÓN DE PESTAÑAS PRINCIPALES
+tab_captura, tab_cruce, tab_reporte = st.tabs([
+    "📋 Captura y Verificación",
+    "🔀 Cruce BASE SIFUB vs CRUCE",
+    "📊 Reporte Diario y Catálogo",
+])
 
 # ---------------------------------------------------------
 # PESTAÑA 1: CAPTURA Y VERIFICACIÓN
@@ -216,7 +343,6 @@ with tab_captura:
       opciones_catalogo = obtener_opciones_catalogo()
       opciones_personal = obtener_opciones_personal()
 
-      # CONTROL DE SELECCIÓN DE CAPTURISTA ESTÁTICO
       idx_actual = 0
       if st.session_state.capturista_fijo in opciones_personal:
         idx_actual = opciones_personal.index(st.session_state.capturista_fijo)
@@ -230,7 +356,6 @@ with tab_captura:
 
       st.session_state.capturista_fijo = capturista_seleccionado_fuera
 
-      # CONDICIONAL CUMPLEAÑOS (Basado en la hora local de México)
       zona_mx = pytz.timezone("America/Mexico_City")
       es_hoy_cumple = datetime.now(zona_mx).date() == FECHA_CUMPLE
       if es_hoy_cumple and "PAOLA" in st.session_state.capturista_fijo.upper():
@@ -261,7 +386,6 @@ with tab_captura:
           btn_buscar = st.form_submit_button("🔍 Buscar")
 
         if busqueda_input:
-          # Limpiar espacios invisibles y caracteres nulos
           busqueda_limpia = (
               busqueda_input.strip()
               .upper()
@@ -276,7 +400,6 @@ with tab_captura:
           coincidencias = []
           for idx_fila, fila in enumerate(datos):
             if len(fila) > col_busqueda_idx:
-              # Limpiar espacios de la celda de Google Sheets
               valor_celda = (
                   str(fila[col_busqueda_idx])
                   .strip()
@@ -333,10 +456,7 @@ with tab_captura:
                     st.cache_data.clear()
                     st.rerun()
                   except Exception as e_del:
-                    st.error(
-                        f"No se pudieron eliminar los duplicados debido a alta"
-                        f" concurrencia: {e_del}"
-                    )
+                    st.error(f"No se pudieron eliminar los duplicados: {e_del}")
 
             registro_principal = coincidencias[0]
             fila_real = registro_principal["fila_real"]
@@ -428,7 +548,6 @@ with tab_captura:
                     else:
                       st.session_state.capturista_fijo = capturista_seleccionado
 
-                      # OBTENER HORA EXACTA DE MÉXICO (UTC-6)
                       zona_mx = pytz.timezone("America/Mexico_City")
                       fecha_hora_actual = datetime.now(zona_mx).strftime(
                           "%Y-%m-%d %H:%M:%S"
@@ -441,7 +560,6 @@ with tab_captura:
                       ):
                         val_col_h = incidencia_seleccionada
 
-                      # ESCRITURA CON REINTENTOS PARA EVITAR ERRORES 429
                       try:
                         res_upd = ejecutar_con_reintento(
                             ws.update,
@@ -457,17 +575,11 @@ with tab_captura:
                         if res_upd is not None or True:
                           st.success(
                               f"¡Registro exitoso en la fila {fila_real}!"
-                              f" Capturó: {capturista_seleccionado} | Incidencia"
-                              f" (Col H): '{val_col_h}'"
                           )
                           st.cache_data.clear()
                           st.rerun()
                       except Exception as err:
-                        st.error(
-                            "⚠️ El servidor de Google recibió demasiadas"
-                            " peticiones. Por favor, haz clic en 'REGISTRAR' de"
-                            f" nuevo. Detalles: {err}"
-                        )
+                        st.error(f"Error al actualizar datos: {err}")
             else:
               st.subheader("🔵 Registro Ya Capturado")
 
@@ -490,28 +602,6 @@ with tab_captura:
                   f" {capturista_val if capturista_val else 'No registrado'}"
               )
 
-              st.divider()
-              st.subheader("📍 Zonas Prioritarias de Benito Juárez")
-
-              zonas_bj = pd.DataFrame({
-                  "Sector": [
-                      "Sector 1",
-                      "Sector 2",
-                      "Sector 3",
-                      "Sector 4",
-                      "Sector 5",
-                  ],
-                  "Colonias Cobertura": [
-                      "Portales Norte, Portales Sur, Portales Oriente",
-                      "Alamos, Narvarte Poniente, Narvarte Oriente",
-                      "Del Valle Centro, Del Valle Sur, Del Valle Norte",
-                      "Mixcoac, Insurgentes Mixcoac, Actipan",
-                      "San José Insurgentes, Crédito Constructor, Nápoles",
-                  ],
-              })
-              st.dataframe(
-                  zonas_bj, use_container_width=True, hide_index=True
-              )
           else:
             st.error(
                 f"❌ El {tipo_busqueda} '{busqueda_input}' no se encuentra en"
@@ -520,8 +610,33 @@ with tab_captura:
     except Exception as e:
       st.error(f"Ocurrió un error al procesar los datos: {e}")
 
+
 # ---------------------------------------------------------
-# PESTAÑA 2: REPORTE DIARIO, GENERAL Y CONTEO DE CATÁLOGO
+# PESTAÑA 2: CRUCE BASE SIFUB VS CRUCE (CON MARCADO EN ROJO)
+# ---------------------------------------------------------
+with tab_cruce:
+  st.title("🔀 Cruce de Información: BASE SIFUB vs CRUCE")
+  st.write(
+      "Al presionar el botón, la aplicación revisará la pestaña **BASE SIFUB**,"
+      " buscará qué registros **NO existen** en la pestaña **CRUCE** y los"
+      " **pintará en color rojo directamente en Google Sheets**."
+  )
+
+  st.divider()
+
+  if st.button(
+      "🔀 Ejecutar Cruce y Marcar Faltantes en Rojo",
+      type="primary",
+      use_container_width=True,
+  ):
+    with st.spinner(
+        "Procesando cruce y aplicando formato en Google Sheets..."
+    ):
+      realizar_cruce_y_marcar_rojo()
+
+
+# ---------------------------------------------------------
+# PESTAÑA 3: REPORTE DIARIO Y CATÁLOGO
 # ---------------------------------------------------------
 with tab_reporte:
   st.title("🔒 Acceso Restringido - Reporte Diario y Catálogo")
@@ -539,7 +654,7 @@ with tab_reporte:
         st.success("Acceso concedido.")
         st.rerun()
       else:
-        st.error("❌ Contraseña incorrecta. Intenta nuevamente.")
+        st.error("❌ Contraseña incorrecta.")
   else:
     col_tit, col_logout = st.columns([4, 1])
     with col_tit:
@@ -562,7 +677,6 @@ with tab_reporte:
           )
           fecha_raw = row[8].strip() if len(row) > 8 else ""
           capturista = row[9].strip() if len(row) > 9 else "NO REGISTRADO"
-
           fecha_corta = fecha_raw.split(" ")[0] if fecha_raw else "SIN FECHA"
 
           registros_capturados.append({
@@ -574,14 +688,9 @@ with tab_reporte:
       if registros_capturados:
         df_rep = pd.DataFrame(registros_capturados)
 
-        # 1. MÉTRICAS GENERALES DE CAPTURA
-        total_capturas_historico = len(df_rep)
-
-        st.markdown("### 📌 Resumen General")
         m1, m2 = st.columns(2)
         m1.metric(
-            label="📦 Total Acumulado Capturado",
-            value=total_capturas_historico,
+            label="📦 Total Acumulado Capturado", value=len(df_rep)
         )
 
         fechas_disponibles = sorted(
@@ -600,9 +709,7 @@ with tab_reporte:
 
         st.divider()
 
-        # 2. CONTEO DE CATÁLOGO / INCIDENCIAS (COLUMNA H)
         st.subheader("📋 Conteo del Catálogo de Incidencias (Columna H)")
-
         conteo_cat_dia = df_filtrado["Incidencia"].value_counts().reset_index()
         conteo_cat_dia.columns = ["Incidencia / Catálogo", "Cantidad (Día)"]
 
@@ -623,12 +730,10 @@ with tab_reporte:
         )
 
         col_cat_tab, col_cat_graf = st.columns([1, 1], gap="medium")
-
         with col_cat_tab:
           st.dataframe(
               df_cat_merged, use_container_width=True, hide_index=True
           )
-
         with col_cat_graf:
           st.bar_chart(
               df_cat_merged.set_index("Incidencia / Catálogo")[
@@ -638,9 +743,7 @@ with tab_reporte:
 
         st.divider()
 
-        # 3. RENDIMIENTO EXCLUSIVO DEL PERSONAL DE CAPTURA
         st.subheader("👤 Rendimiento por Personal de Captura")
-
         lista_personal_raw = obtener_opciones_personal()
         lista_personal_oficial = [
             p.upper() for p in lista_personal_raw if p and not p.startswith("--")
@@ -690,23 +793,15 @@ with tab_reporte:
           )
 
           col_tabla, col_grafica = st.columns([1, 1], gap="medium")
-
           with col_tabla:
             st.dataframe(
                 df_cap_merged, use_container_width=True, hide_index=True
             )
-
           with col_grafica:
             st.bar_chart(
                 df_cap_merged.set_index("Capturista / Persona")[
                     ["Total (Día Seleccionado)", "Total (Acumulado Histórico)"]
                 ]
             )
-        else:
-          st.warning(
-              "No se encontraron nombres en la hoja PERSONAL DE CAPTURA."
-          )
       else:
         st.info("Aún no hay registros marcados como capturados.")
-    else:
-      st.warning("No hay datos disponibles en la pestaña CRUCE.")
